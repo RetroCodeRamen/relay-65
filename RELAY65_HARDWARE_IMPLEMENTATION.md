@@ -647,3 +647,586 @@ Fourteen 8-bit DPDT register slices (P is 6 bits), one 8-bit parallel relay ALU 
 One DPDT bit, then an 8-bit slice with a 74HC541 OE.
 
 **NEW DESIGN** first experiments and the v1 recommendation follow.
+
+---
+
+# Performance-Optimized Physical Architecture
+
+This section revises the **physical** CPU. It does **not** change the software-visible ISA. The emulator remains the behavioral reference until a later, explicit microcode-engine change. Contiki, BASIC, the monitor ROM, and existing binaries stay valid.
+
+**OLD DESIGN:** ~220 DPDT, semiconductor internal-bus source selection, PC+1 and SP±1 through the general ALU, one timing interval for every microstep.
+
+**NEW DESIGN:** relay storage **and** relay data routing; silicon microcode/decode/drivers/memory/clocks; spend relays on fetch/PC paths that dominate real traces; variable microcycle timing; contact-mode carry rather than eight sequential coil operations.
+
+**WHY:** traces of the unmodified emulator show opcode FETCH at ~36–40% of microsteps and **all `pc_inc` sequences at ~50–54% of microsteps**. A CPU that keeps PC+1 on the general ALU spends most of its life incrementing the program counter. A CPU that uses HC buffers as the internal source mux is not an electromechanical datapath.
+
+Three contracts, kept distinct:
+
+| Layer | What must stay | What may change |
+| --- | --- | --- |
+| **Software-visible** | NMOS 6502 register/memory/I/O effects; jam on illegal opcodes; NMOS `JMP ($xxFF)` wrap; B not stored; same memory map | Nothing user software can observe |
+| **Current emulator microarchitecture** | `isa.py` row lists, 12-row FETCH, 11-row `fetch_byte`, 8-row `pc_inc`, ALU_A/ALU_B always loaded first | `WallClock` only, until we retarget microcode |
+| **Proposed physical optimization** | Faster equivalent of the same architectural transfers | FETCH/`fetch_byte`/`pc_inc` row counts; optional bypass bits; timing-class bits |
+
+If hardware is built as specified here, the emulator’s **microcode engine** (not the ISA) would later need a shorter FETCH page, `fetch_byte`/`pc_inc` substitution, and optional CW bits for address-source, PC_INC, timing class, and fused ALU destination. **Those emulator edits are identified, not implemented.**
+
+---
+
+## Part 1 — Challenge the existing assumptions
+
+| Assumption | Classification | Why |
+| --- | --- | --- |
+| One DPDT per stored bit | **PLAUSIBLE BUT UNTESTED** | A non-latching coil can hold a 1 if a contact supplies self-hold and LOAD can break it. Not bench-proven on the cheap 5 V / ~40 mA class with flyback and LOAD=0 retention. |
+| Register holding as “coil = bit” | **QUESTIONABLE** until experiment 1 | Release time, bounce, and LOAD/hold races are the failure mode. A 2-relay RS cell is the reliable fallback (~+110 DPDT). |
+| LOAD as a MOSFET into the coil | **PLAUSIBLE BUT UNTESTED** | Allowed (coil driver). Must force ON for D=1 and force OFF (break hold) for D=0 for a full release interval. |
+| Source OE via 74HC541 | **SHOULD BE CHANGED** for the preferred machine | Electrically fine (Design A). Data would leave relays through silicon muxes, which is not the preferred datapath. |
+| Shared internal 8-bit bus | **PROVEN** in the emulator / **PLAUSIBLE** physically | Every `CW` has one SRC and one DST. Φ0 dead time is the contention rule. Needs the two-register experiment. |
+| ALU ripple as “8 slices, same Φ1 as a transfer” | **SHOULD BE CHANGED** if carry coils are sequenced bit-by-bit | Eight *coil* delays would dominate the CPU. Carry through **already closed contacts** is a different, much faster path. |
+| ALU function selection “typically four relays” | **QUESTIONABLE** | That was not a circuit. Count invert, XOR, sum, G/P, AND, OR, shift, result select. |
+| PC increment through the general ALU | **SHOULD BE CHANGED** | Traces: ~2 `pc_inc` sequences per instruction, 8 rows each → **~50% of all microsteps**. |
+| Memory fetch always via MAR copy of PC | **SHOULD BE CHANGED** for opcode/operand fetch | Two extra bus transfers per fetch. MAR remains required for EA. |
+| Instruction fetch = 12 settled rows | **PROVEN** in current microcode; **SHOULD BE CHANGED** physically | Equivalent fetch can be 2 settled phases with PC address select + PC+1. |
+| Operand `fetch_byte` = 11 rows | **PROVEN** in current microcode; **SHOULD BE CHANGED** physically | Same mechanism as opcode fetch without the IR load. |
+| Semiconductor microcode / decode / drivers / RAM | **PROVEN** (project rule) | Does not compute the user program. |
+| One timing interval for all ops | **SHOULD BE CHANGED** | ADD carry and PCL→MARL are not the same critical path. |
+| Power “not a relay-count problem” | **QUESTIONABLE** | 40 mA × every stored 1 is a first-class PSU/thermal limit. ~50% ones on ~110 storage bits ≈ 2.2 A just to remember. |
+
+---
+
+## Part 2 — A real relay register bit
+
+Target part class: **non-latching DPDT**, **5 V coil**, **~40 mA**, operate/release on the order of **1–8 ms**.
+
+### Verdict
+
+**One DPDT per stored bit is practical if and only if** a semiconductor LOAD gate is allowed to both **force-energize** and **force-release** the coil, and a **self-hold contact** retains a 1 after LOAD returns to 0. That matches the project rules (MOSFET coil drivers allowed).
+
+It is not “a relay is a flip-flop by itself.” Without the LOAD/hold-break circuit, a non-latching relay forgets on release.
+
+If experiment 1 fails (hold drop-out, LOAD race, diode-stretched release, welded hold contact), the **lowest-relay-count reliable alternative** is a **2-relay RS cell** (SET coil, RESET coil, cross-hold). That adds ~110 DPDT to every design below — which is why the bit-cell experiment is first.
+
+Latching DPDT would cut static power nearly to zero. That is a **BOM change**, not assumed here.
+
+### Conceptual 1-relay D latch (one bit)
+
+- **Pole A — hold.** Common to the hold node. NO closes when picked up and feeds +5 V into hold so the coil stays on after LOAD ends.
+- **Pole B — Q.** Common to Q. NO = Q true. NC = optional /Q.
+
+**Coil suppression:** a diode across the coil is required for the MOSFET. A plain diode **lengthens release** (often 2–3×). Prefer **diode + zener** (or resistor-zener) so release stays a few milliseconds. **PLAUSIBLE BUT UNTESTED** on the cheap part.
+
+**LOAD=1, D=1 (SET):** MOSFET path from +5 V **forces** operate. After operate time, pole A hold closes. LOAD may return to 0; the bit stays 1.
+
+**LOAD=1, D=0 (RESET):** MOSFET **opens the hold path** and does not force the coil on. Armature releases; hold NO opens. LOAD must stay asserted for a **full release** (budget 5–10 ms until measured). Then LOAD=0 leaves the bit 0.
+
+**LOAD=0:** neither force-set nor force-reset. State is hold (1) or de-energized (0).
+
+**Q:** pole B NO, used by output-enable relays. Do not put coil current on this pole.
+
+**LED:** resistor+LED across the coil (or hold node) indicates a stored 1 without stealing the Q pole.
+
+**Output enable:** **not** on the storage relay. A separate OE relay (Part 3) connects Q to the internal bus.
+
+**Power while storing 1:** **~40 mA continuous** at 5 V ≈ 0.2 W per bit. Eight 1s in A = 320 mA. That argues for a later latching BOM if heat/noise is ugly; it does not argue against 1-relay storage if the PSU is sized.
+
+**Race to avoid:** never combinationally close a loop from incrementer outputs back into the same coils without Φ2 LOAD (Part 5 uses combinational contacts **into** the existing LOAD gate, same as a bus load).
+
+---
+
+## Part 3 — Relay-only register output gating
+
+**OLD DESIGN:** storage relay Q → 74HC541 → internal bus.
+
+**NEW DESIGN:** storage contact Q → **OE relay contacts** → internal bus. Semiconductor **decode** still turns exactly one SRC one-hot into one OE coil (74HC154 + MOSFET). Data does not pass through that silicon.
+
+### Two bits per DPDT OE
+
+An 8-bit source needs 8 SPDT “connect Q / isolate” switches. One DPDT is two SPDT. **4 DPDT per 8-bit sourced register** (12 relays per fully bus-readable byte: 8 storage + 4 OE).
+
+Electrically sound **if**:
+
+1. Φ0 releases **all** OE coils (break-before-make).
+2. Φ1 energizes **one** SRC OE.
+3. Isolated throw is open, not tied to another driver.
+4. Bits sharing one DPDT enable together — which is exactly what byte OE needs.
+
+A single OE-coil failure drops two bits; acceptable if experiment 2 passes. **v1 budgets paired OE.** Per-bit OE (8 DPDT/byte) is the serviceability fallback (~+50 relays).
+
+IR, ALU_A, and ALU_B **never** appear in `Src` — **do not** buy OE for them. ALU **result** does (`Src.ALU`) — 4 DPDT. `Src.MEM` and `Src.CONST` stay silicon. `Src.M7EXT` is eight copies of MDR.7: **4 DPDT** with paralleled coils.
+
+### Register relay count (NEW, 1 DPDT/bit storage + paired OE)
+
+| Register | Sources bus? | Storage | OE | Total |
+| --- | --- | --- | --- | --- |
+| A | yes | 8 | 4 | 12 |
+| X | yes | 8 | 4 | 12 |
+| Y | yes | 8 | 4 | 12 |
+| SP | yes | 8 | 4 | 12 |
+| T | yes | 8 | 4 | 12 |
+| P | yes (6 stored bits) | 6 | 3 | 9 |
+| PCL | yes | 8 | 4 | 12 |
+| PCH | yes | 8 | 4 | 12 |
+| MARL | yes (`jmp_ind`) | 8 | 4 | 12 |
+| MARH | yes | 8 | 4 | 12 |
+| MDR | yes | 8 | 4 | 12 |
+| IR | **no** | 8 | 0 | 8 |
+| ALU_A | **no** | 8 | 0 | 8 |
+| ALU_B | **no** | 8 | 0 | 8 |
+| ALU result | yes | 0 (ALU) | 4 | 4 |
+| M7EXT | yes | 0 | 4 | 4 |
+| **Register/bus subtotal** | | **110** | **55** | **165** |
+
+---
+
+## Part 4 — Profile of the actual emulator
+
+Instrumentation: `emulator/tools/profile_workloads.py` wraps `CPU.step` **without** changing control words. Peeking a CW is side-effect-free (calling `CPU._current()` before `step()` would illegally mutate FETCH→EXEC).
+
+Workloads used the existing binaries. Counts are logical microsteps, not wall time.
+
+| Workload | µsteps | Instructions | **µsteps/ins** |
+| --- | --- | --- | --- |
+| Monitor to `>` prompt | 45 639 | 1 383 | **33.00** |
+| Contiki `hello-world` | 189 274 | 6 172 | **30.67** |
+| Contiki console boot | 597 829 | 20 006 | **29.88** |
+| Contiki console idle (100k steps) | 100 000 | 3 026 | **33.05** |
+| BASIC enter + `PRINT 1+2` | 752 125 | 24 669 | **30.49** |
+| BASIC `FOR I=1 TO 10` / `PRINT` / `RUN` | 400 000 | 12 513 | **31.97** |
+
+Synthetic mean of 151 filled opcodes remains ~35 µsteps (Step 11). **Real Contiki/BASIC sit at ~30–33**, because they hammer branches, `(zp),Y`, INY/DEY, and zp stores rather than a uniform opcode average.
+
+### Share of microsteps (equal-time rows)
+
+| Activity | Monitor | Hello | Console boot | Idle | BASIC PRINT | BASIC FOR |
+| --- | --- | --- | --- | --- | --- | --- |
+| FETCH rows | 36.4% | 39.1% | 40.2% | 36.3% | 39.4% | 37.5% |
+| EXEC rows | 63.6% | 60.8% | 59.8% | 63.7% | 60.6% | 62.5% |
+| All `pc_inc` (8 × ALU_A←PCL) | **52.5%** | **51.1%** | **53.9%** | **54.4%** | **52.7%** | **51.9%** |
+| mem_rd strobes | 7.6% | 8.0% | 7.9% | 7.7% | 8.1% | 7.9% |
+| ALU ADD/ADC rows | 15.4% | 16.0% | 15.9% | 15.6% | 15.5% | 15.5% |
+| ALU writebacks (`Src.ALU`) | 16.4% | 16.8% | 16.8% | 16.5% | 16.7% | 16.6% |
+
+`pc_inc` sequences ≈ ALU_A sourced from PCL: **~2.0–2.25 PC+1 operations per instruction** (opcode increment + ~0.8–1.1 operand `fetch_byte` + occasional RTS).
+
+ALU_A sources are dominated by **PCL and PCH**. After those, BASIC PRINT (24 669 ins): MDR 11 247, SP 4 358, A 3 444, T 2 794, MARL 2 651, Y 1 935, X 638, P 581. **A→ALU_A is ~14% of instructions and ~0.5% of microsteps.** MDR→ALU_A is ~46% of instructions but still ~1.5% of microsteps.
+
+Opcode mix (illustrative):
+
+- **Monitor prompt:** BEQ 16.5%, then a dump/print loop of JSR/RTS/LDA abs/LDA abs,X/PHA/PLA/AND #/STA abs/INX/JMP ~8% each.
+- **Contiki hello:** STA `(zp),Y` 10.8%, BNE 9.9%, INY 9.0%, LDA `(zp),Y` 8.2%, LDY # 6.3%.
+- **Console boot:** BNE 13%, STA `(zp),Y` 8.7%, ROL zp 7.8%, INY 7.5%, DEY 5.6%.
+- **Idle:** BEQ/JSR/RTS/BNE/INC zp/LDA abs/JMP.
+- **BASIC:** BNE, LDA `(zp),Y`, ROL zp, DEY, LDY #, STA zp, JSR/RTS — interpreter bytecode walk.
+
+**Conclusion:** the only ~24-relay class change that can move IPS by **~2×** is **fetch/PC**. ALU input bypasses and INX helpers are percentage-point effects until PC is fixed. Do **not** duplicate the ALU.
+
+---
+
+## Part 5 — PC and fetch acceleration
+
+### A. Direct PC → address bus
+
+MAR must remain for zp/abs/indexed/stack. Opcode and operand fetches currently copy PCL→MARL, PCH→MARH (2 rows) so memory always sees MAR.
+
+**NEW:** 16-bit 2:1 select, PC vs MAR. 16 SPDT = **8 DPDT**. One coil `ADDR_PC` from microcode. Contacts sit on A[15:0] to SRAM.
+
+Electrically sound if PC and MAR Qs are steady and the DPDT commons are the memory address with throws to PC vs MAR (only one path selected).
+
+### B. Dedicated PC+1
+
+Do **not** send PCL through ALU_A, CONST 1 through ALU_B, ADD, write PCL, then ADC PCH.
+
+**Derived count:** increment is XOR-with-carry-in and AND-propagate.
+
+- Cin into bit 0 is wired 1.
+- Propagate into bit *k* is the **series string of PC Q contacts 0..k−1** (already on storage relays) → **0 extra relays** for carry if a MOSFET senses the chain (or XOR is contact-mode).
+- Sum bit *k* = PCk ⊕ cin_k: **1 DPDT per bit**, coil = cin_k (or a driver from the propagate chain), throws select PCk vs /PCk onto the incrementer output.
+
+**Expected: 16 DPDT.** Optimistic 12 if LSB tricks are used (not worth it). Conservative **24** if PC+1 is latched in an extra 8 DPDT to isolate hold races.
+
+**Race:** combinational +1 **outputs** feed the existing PC LOAD gates (same as bus LOAD). Do not close a loop while LOAD is false. Incrementer inputs are PC Q, which stay still until Φ2.
+
+**Concurrent with memory read:** yes. PC is stable from the previous instruction. `ADDR_PC` places PC on A[15:0]; SRAM is silicon-fast; the incrementer evaluates from the same PC Q contacts. No wait for MAR.
+
+### C. Combined fast fetch (respect settling)
+
+Not one mechanical cycle. Two **settled phases**:
+
+**PHASE 1 (MEMORY class):** `ADDR_PC`; memory OE; PC+1 network evaluates. Wait is the **8 DPDT address select**, not SRAM.
+
+**PHASE 2 (FAST):** Φ2 loads IR (opcode) or MDR (operand) from the data bus **and** loads PC from incrementer outputs. Two semiconductor LOADs in one Φ2 are allowed (different destinations). If the current spike is ugly, split 2a IR / 2b PC — still far cheaper than 12 rows.
+
+Then the sequencer goes EXEC.
+
+**Operand `fetch_byte`:** same two phases, destination MDR not IR.
+
+**Realistic microsteps:** **2** per opcode fetch, **2** per operand byte — not 1 and not 12.
+
+RESET/IRQ/NMI vector fetches still use MAR (`$FFxx`). No PC path required.
+
+---
+
+## Part 6 — Quantify PC optimization benefit
+
+Assumptions:
+
+- Baseline FETCH 12, `fetch_byte` 11, `pc_inc` 8.
+- Option A (incrementer only): FETCH = 2 MAR copy + 1 MEM + 1 IR + 1 PCLOAD = **5**; `fetch_byte` = **4**.
+- Option B (address mux only): FETCH = 1 MEM + 1 IR + 8 `pc_inc` = **10**; `fetch_byte` = **9**.
+- Option C (both): FETCH = **2**; `fetch_byte` = **2**.
+
+Per-instruction extra `fetch_byte` ≈ (`PCL→MARL` − opcode fetches) / instructions.
+
+| | Relays added | FETCH | fetch_byte | Monitor 33.00 | Hello 30.67 | Boot 29.88 | Idle 33.05 | BASIC 30.49 | FOR 31.97 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Baseline | 0 | 12 | 11 | 33.00 | 30.67 | 29.88 | 33.05 | 30.49 | 31.97 |
+| A incrementer | **16** (24 cons.) | 5 | 4 | ~19.2 | ~17.3 | ~16.8 | ~18.4 | ~17.2 | ~18.1 |
+| B addr mux | **8** | 10 | 9 | ~27.8 | ~26.0 | ~25.5 | ~27.8 | ~25.8 | ~27.2 |
+| **C both** | **24** (32 cons.) | **2** | **2** | **~13.3** | **~13.4** | **~12.9** | **~13.9** | **~12.8** | **~13.5** |
+
+A/C remaining: subtract 7 per opcode fetch and 7 per extra `fetch_byte` for A; subtract 10 and 9 for C.
+
+**Relative speed (microsteps, equal-time rows):**
+
+| | vs baseline (hello / BASIC PRINT) |
+| --- | --- |
+| A | ~1.77× / ~1.77× |
+| B | ~1.18× / ~1.18× |
+| **C** | **~2.29× / ~2.38×** |
+
+**Predicted IPS** (hello 30.67 → 13.4 µsteps) at a flat 20 ms/row: **3.7 IPS** (was 1.6). With FAST rows at 8 ms and remaining ADDs at 25 ms (Parts 11–12): **~7–9 IPS** (Part 16).
+
+Option B alone is a poor buy. Option A is most of the win. Option C is the right pack: **8 extra relays over A** remove the MAR copy from the hottest path. **NEW DESIGN uses C.**
+
+---
+
+## Part 7 — ALU input fast paths
+
+An 8-bit 2:1 is 8 SPDT = **4 DPDT**. Verified.
+
+Until PC is fixed, A→ALU and MDR→ALU save **one row** buried under 50% PC+1.
+
+| Bypass | Relays | µsteps saved when used | Workload (BASIC PRINT) | Speedup vs A | Speedup vs Design C fetch | Recommend? |
+| --- | --- | --- | --- | --- | --- | --- |
+| A → ALU A input | 4 | 1 | 14% of ins; **0.46%** of µsteps | ~0.5% | ~1.1% | **No** for v1 |
+| MDR → ALU A input | 4 | 1 | 46% of ins; **1.5%** of µsteps | ~1.5% | ~3.5% | Optional in Design C |
+| MDR → ALU B input | 4 | 1 | Binary ops; a few % of ins | ~1% | ~2% | Optional in Design C |
+| X/Y → ALU | 4 each | 1 | INY/DEY/index | small | small | **No** |
+| CONST → ALU B | 0 extra as a bus source | 1 | `pc_inc`/`sp_*`/INX until PC+1 exists | high until C | small after C | **No** separate box |
+
+**Do not add every bypass.** Design B: none. Design C: **A and MDR into ALU A/B as two 4-DPDT muxes (8 relays)** only after fetch is done.
+
+---
+
+## Part 8 — ALU result fast writeback
+
+Today: `alu(op)` then `xfer(Src.ALU, dst)` — two rows. Combining means Φ1 evaluates and Φ2 LOADs a decoded destination from ALU result contacts.
+
+A **small** mechanism: keep `Src.ALU` OE, but allow DST ∈ {A,X,Y,SP,PCL,PCH,MARL,MARH} **in the same word as the ALU op**. The emulator already has both fields; `alu()` currently sets DST NONE. That is a **microcode packing change**, not a crossbar.
+
+Physically the ALU result already has OE onto the bus. If Φ1 result is valid **and** we assert ALU OE and DST LOAD on Φ2, the existing bus **is** the writeback. **0 extra relays** if one row may set ALU op **and** DST.
+
+**Caveat:** ALU evaluate must finish before LOAD — a timing-class issue (ADD rows already long), not a relay issue.
+
+**OLD DESIGN** treated `alu()` and writeback as separate rows because that matched `isa.py` helpers.
+
+**NEW DESIGN:** allow fused ALU+DST in microcode (**0–4 relays** if a buffer is wanted). **Reject** a destination crossbar. After PC accel, most writebacks were PCL/PCH and disappear. Remaining ~1–2 fused rows per typical LDA/ADC/INX → **~5–8%** on Design B. **Recommend: fuse in microcode later, 0 relays.**
+
+---
+
+## Part 9 — Increment/decrement helper
+
+Shared 8-bit +1/−1 for INX/DEX/INY/DEY/SP/MARL.
+
+Count: **8 DPDT** XOR + existing Q contacts for propagate, plus 1 DPDT for +1 vs −1. **~10–12 DPDT.**
+
+After Option C, INX is **2 FETCH + 5 EXEC = 7** rows. A helper might make EXEC **2**. Save ~3 rows.
+
+Frequency: console boot INY+DEY ≈ **13%** of instructions; hello ≈ **14%**; BASIC FOR much lower. Idle INC **zp** still uses memory RMW and the **general ALU**.
+
+Speed benefit after C: 0.13 × 3 / 13 ≈ **3%**. Before C: lost in PC+1.
+
+**Verdict: do not add for v1.** Revisit in Design C if INY/DEY still annoy. **Do not** build a second adder.
+
+---
+
+## Part 10 — Do not duplicate the ALU
+
+Traces show **one** ADD/ADC hotspot: `pc_inc`. Once that has a dedicated incrementer, leftover ADD traffic is EA, ADC/SBC, SP, INX/Y, branches — exactly the general ALU.
+
+**v1: one primary ALU. No second 8-bit adder.**
+
+---
+
+## Part 11 — Variable-duration microcycles
+
+**OLD DESIGN:** ~20 ms/row for everything so ADD ripple could finish.
+
+**NEW DESIGN:** 2-bit `TCLASS` in unused CW bytes 6–7. Sequencer silicon stretches Φ1.
+
+| Class | Used for | Conservative wait | Likely after bench |
+| --- | --- | --- | --- |
+| FAST | SRC OE + LOAD, no ALU; PC LOAD from incrementer | **8–12 ms** | 5–8 ms |
+| LOGIC | AND/OR/XOR/SHIFT; invert_b | **12–15 ms** | 8–12 ms |
+| ADD | contact-carry ADD/ADC | **20–30 ms** contact-mode; **40–80 ms** if coils ripple per bit (**reject that ALU**) | 15–25 ms |
+| MEMORY | address-select OE + silicon RAM | **8–12 ms** (wait on **relays**, not SRAM) | 5–10 ms |
+
+The request’s example numbers (FAST 5–10, ADD 20–50+) are **order-of-magnitude right** only if carry is contact-mode. If carry is 8 sequential coil operates, ADD becomes **>50 ms** and the machine feels like it is only adding.
+
+Microcode: FETCH phase 1 = MEMORY; phase 2 = FAST; `alu(ADD)` = ADD; `xfer` = FAST; `alu(AND)` = LOGIC.
+
+Emulator later: `WallClock.wait(tclass)` instead of one leeway. **Not implemented now.**
+
+---
+
+## Part 12 — Ripple carry
+
+If **each bit’s carry-out drives the next bit’s carry-in coil**, worst case is **8 mechanical operates in series**. At 5 ms each that is **40 ms** plus bounce. **SHOULD BE CHANGED.**
+
+If each bit has **generate** and **propagate** relays whose coils depend only on A, B, invert_b (all bits **in parallel**, one operate time), then Cout is a **contact chain**. The ripple is **electrical** through metal, plus **one** bounce when those G/P contacts closed — not 8× operate.
+
+Manchester-style: a sense line through propagate contacts; generate injects carry. Relays **must not** recoil on carry.
+
+| Architecture | Relays (carry only, 8-bit, above invert/XOR) | Worst-case switching | Settle (order) | Complexity |
+| --- | --- | --- | --- | --- |
+| 1. Coil-per-bit ripple | 8 carry relays sequenced | **8 coil operates** | **40–80 ms** | Simple, **too slow** |
+| 2. Contact ripple / Manchester (G/P parallel) | 8–16 (G and P; share with adder XOR) | 1 coil phase + electrical chain | **15–25 ms** total ADD class | Moderate; **v1 choice** |
+| 3. 4+4 grouped carry | +8–12 group P/G | 1 coil phase + shorter chains | **12–20 ms** | If experiment 6–8 shows voltage drop/noise |
+| 4. Full lookahead | +20–40 | 1 coil phase | ~10–15 ms | **Reject** for v1 |
+
+**v1:** architecture 2. Budget architecture 3 in Design C / spare. **Do not** ship architecture 1.
+
+---
+
+## Part 13 — ALU relay count from a 1-bit slice
+
+Functions `ALUCard.evaluate` actually provides: invert_b, ADD/ADC sum+carry, AND, OR, XOR (also via adder), BIT (AND + B6/B7 flags), PASS_A, ASL/LSR/ROL/ROR, decimal nibble adjust when D=1.
+
+| Slice function | Optimistic DPDT | Expected | Conservative | Share poles? |
+| --- | --- | --- | --- | --- |
+| invert_b (B vs /B from ALU_B complementary) | 1 | 1 | 1 | Uses ALU_B /Q |
+| XOR A⊕B′ (sum partial) | 1 | 1 | 2 | — |
+| XOR with Cin (sum) | 1 | 1 | 2 | — |
+| Carry G/P | 1 | 2 | 2 | Majority vs dedicated G and P |
+| AND | 0.5 | 1 | 1 | One pole; OR on the other |
+| OR | 0.5 | 0 | 1 | Shared with AND if mux selects pole |
+| Shift L/R routing | 0 | 1 | 1 | Byte wiring; 1 DPDT/bit L vs R |
+| Result select ADD/LOGIC/SHIFT | 2 | 2 | 3 | 4:1 needs 2; 8:1 needs 3 |
+| **Per bit** | **7** | **9** | **13** | |
+| **×8 bits** | **56** | **72** | **104** | |
+
+Byte-wide:
+
+| Block | Optimistic | Expected | Conservative |
+| --- | --- | --- | --- |
+| Z tree | 4 | 4 | 6 |
+| N | 0 | 0 | 0 |
+| V | 2 | 2 | 4 |
+| C_latch storage | 1 | 2 | 2 |
+| Cin mux 4:1 | 2 | 2 | 4 |
+| BCD +6 hardware | 0 (microcode later) | 8 | 12 |
+| **Byte extras** | **9** | **18** | **28** |
+
+**ALU total: optimistic ~65, expected ~90, conservative ~132.**
+
+Rare functions: XOR can be an adder tap; BIT uses AND+wires; PASS_A is result mux selecting A. **Do not** build a subtractor. Decimal: Contiki/BASIC bring-up does not `SED`. **Expected budget keeps 8 DPDT** so D mode is not silently dropped vs `alu.py`.
+
+Result OE (4 DPDT) is counted in Part 3, not again here.
+
+---
+
+## Part 14 — Preserve 6502 behavior
+
+Allowed: fewer microsteps, different physical paths, fused ALU+DST, PC+1 hardware, ADDR_PC, timing classes.
+
+Not allowed: different A/X/Y/SP/P/PC/memory results; 65C02; filling illegal opcodes; skipping abs,X carry; fixing `JMP ($xxFF)`.
+
+| Sequence now | Physical equivalent | Software sees |
+| --- | --- | --- |
+| PCL→MARL, PCH→MARH, MEM→MDR, MDR→IR, 8-row PC+1 | ADDR_PC, MEM→IR, PC←PC+1 | Next opcode in IR, PC incremented |
+| `fetch_byte` | ADDR_PC, MEM→MDR, PC←PC+1 | Operand in MDR, PC incremented |
+| `pc_inc` on RTS | PC←PC+1 hardware | PC points at next instruction |
+| `xfer(A,ALU_A); alu; xfer(ALU,A)` | optional fuse | A updated, flags as now |
+
+**Emulator changes later (not now):**
+
+1. `isa.FETCH` / `isa.fetch_byte` / `isa.pc_inc` rewritten to the 2-phase sequences (or CW bits `addr_pc` / `pc_inc_hw`).
+2. `CW.pack` unused bytes: `TCLASS`, maybe fused DST.
+3. `WallClock` / `CPU.step` wait by class.
+4. Tests that assert **row counts** updated; tests that assert **architectural state** unchanged.
+
+Do not retarget microcode until experiments 1–6 and 9–10 pass.
+
+---
+
+## Part 15 — Optimized relay budget
+
+### DESIGN A — Minimal (closest to current architecture)
+
+Goal: fewest relays. Silicon bus OE. ALU PC+1. One timing class.
+
+| Block | DPDT |
+| --- | --- |
+| Storage | 110 |
+| Source-enable (HC541) | 0 |
+| ALU expected | 90 |
+| PC accelerator | 0 |
+| Address selection | 0 |
+| Fast paths | 0 |
+| Control | 4 |
+| Miscellaneous | 16 |
+| **TOTAL expected** | **~220** |
+| Optimistic / conservative | ~185 / ~280 |
+
+Performance: baseline ~30–33 µsteps/ins, ~1.5 IPS at 20 ms.
+
+### DESIGN B — Recommended (v1)
+
+Goal: electromechanical datapath + Option C fetch. Spend ~50–100 relays above Design A on **OE + PC**, not a second ALU.
+
+| Block | DPDT |
+| --- | --- |
+| Storage | 110 |
+| Source-enable (paired) | 55 |
+| ALU expected | 90 |
+| PC incrementer | 16 |
+| Address selection PC/MAR | 8 |
+| Fast paths | 0 |
+| Control / timing class | 4 |
+| Miscellaneous (debug, spare positions) | 32 |
+| **TOTAL expected** | **~315** |
+| **BOM / comfortable populate** | **~390–450** |
+| Conservative (per-bit OE, fat ALU, 24-rel PC+1, grouped carry stuffed) | **~470–520** |
+
+**WHY 450–500 rather than 220 or 800:** 220 only exists if the internal bus goes back to silicon. ~315 is the honest populated count if pairing and 1-relay bits both work. The **450 BOM** is the build envelope: per-bit OE if pairing fails (+~50), conservative ALU (+~20–40), PC+1 isolation (+8), grouped carry (+8–12), unpopulated spares. Crossing **550** stacks an inc helper, ALU bypass muxes, and pessimism. **800** would mean 2-relay bits **and** a second ALU — not justified.
+
+### DESIGN C — Performance
+
+Spend toward **550** only for measured leftovers after B.
+
+| Block | DPDT |
+| --- | --- |
+| Design B expected | 315 |
+| Per-bit OE instead of paired | +50 |
+| Grouped 4+4 carry | +12 |
+| MDR/A ALU input muxes | +8 |
+| Inc/dec helper | +12 |
+| Extra PC+1 isolation | +8 |
+| **TOTAL expected** | **~405** |
+| Conservative stack | **~520–560** |
+
+Predicted extra speed vs B: ~5–10%. **Not** another 2×.
+
+---
+
+## Part 16 — Performance table
+
+**A** = current emulator. **B** = Design B Option C (FETCH 2, fetch_byte 2, hardware PC+1). **C** fuses ALU+DST (−1 on LDA/ADC/INX writeback) and inc helper (−3 on INX/DEX). END still a row.
+
+| Instruction | Design A | Design B | Design C |
+| --- | --- | --- | --- |
+| NOP | 13 | 3 | 3 |
+| LDA # | 27 | 8 | 7 |
+| LDA zp | 30 | 11 | 10 |
+| LDA abs | 42 | 14 | 13 |
+| STA abs | 40 | 12 | 12 |
+| ADC # | 28 | 9 | 7 |
+| ADC abs | 43 | 16 | 14 |
+| INX | 17 | 7 | 4 |
+| DEX | 17 | 7 | 4 |
+| Branch taken | 33 | 14 | 14 |
+| Branch not taken | 24 | 5 | 5 |
+| JSR | 54 | ~26 | ~26 |
+| RTS | 37 | ~20 | ~20 |
+| PHA | 21 | 11 | 11 |
+| PLA | 23 | 13 | 12 |
+
+Workload-weighted average µsteps/instruction:
+
+| Workload | A | B | C (approx) |
+| --- | --- | --- | --- |
+| BASIC PRINT | 30.5 | **12.8** | ~12.0 |
+| BASIC FOR | 32.0 | **13.5** | ~12.6 |
+| Contiki hello | 30.7 | **13.4** | ~12.5 |
+| Contiki boot | 29.9 | **12.9** | ~12.0 |
+| Contiki idle | 33.1 | **13.9** | ~13.0 |
+| Monitor prompt | 33.0 | **13.3** | ~12.5 |
+
+**IPS (Contiki/BASIC mix ≈ 13 µsteps/ins on B):**
+
+| Timing | Design A (~31 µsteps) | Design B (~13 µsteps) |
+| --- | --- | --- |
+| Conservative equal 20 ms/row | ~1.6 | ~3.8 |
+| Conservative mixed (FAST/MEM 12 ms, ADD 25 ms; after B most rows FAST) | ~1.6 | **~6** |
+| Likely bench (FAST 8 ms, ADD 20 ms) | n/a (A still has 50% ADD-class `pc_inc`) | **~8–9** |
+
+Design A cannot use FAST timing on half its rows because those rows **are** ADD (`pc_inc`). That is a second, independent reason PC+1 hardware wins.
+
+---
+
+## Part 17 — Rank optimizations
+
+| Rank | Optimization | Relays | µsteps saved | Frequency | Speedup vs A | Relays per % | Complexity | Recommend? |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | Dedicated PC incrementer | 16–24 | 7 / fetch | ~2 / ins | ~1.8× | **~0.2** | Med | **Yes** |
+| 2 | PC/MAR address select | 8 | 2 / fetch | ~2 / ins | ~1.2× alone; **needed for 2-phase fetch** | ~0.4 with C | Low | **Yes** |
+| 3 | Combined fast fetch (1+2) | 24–32 | 10+9×operands | every ins | **~2.3×** | **~0.2** | Med | **Yes (v1)** |
+| 4 | Contact/Manchester carry | 0–16 vs coil-ripple | time, not rows | every ADD | can **double ADD-class speed**; after B ADD is rare | — | Med | **Yes** |
+| 5 | Variable TCLASS | 0 (silicon) | 0 rows | all FAST rows | ~1.3–1.6× wall time on B | 0 | Low | **Yes** |
+| 6 | Fuse ALU+DST in CW | 0–4 | 1 / writeback | after B, ~1/ins | ~5–8% on B | 0 | Low | Yes, microcode later |
+| 7 | Grouped 4+4 carry | 8–12 | 0 rows | ADD | small once contact ripple works | high | Med | Design C if bench fails |
+| 8 | MDR→ALU mux | 4 | 1 | 46% ins | ~1.5% on A, ~3% on B | ~1.3 | Low | Design C only |
+| 9 | A→ALU mux | 4 | 1 | 14% ins | ~0.5% | ~8 | Low | **No** |
+| 10 | Inc/dec helper | 10–12 | 3 | 5–14% ins | ~3% on B | ~4 | Med | **No** for v1 |
+| 11 | Second ALU | ~90 | — | — | unjustified | — | High | **No** |
+| 12 | Silicon bus OE | −55 | 0 | — | 0 | — | Low | Design A only |
+
+---
+
+## Part 18 — Recommended Relay65 v1 architecture
+
+**Choose Design B with Option C fetch, contact-mode ALU carry, variable timing, fused writeback left for a later microcode pass, no second ALU, no INX helper, no A/MDR bypass muxes.**
+
+This is the balance: ~2.3× fewer microsteps where the traces say time is spent; datapath stays relay contacts; relay count stays understandable; BOM sits in the 390–450 band with headroom to 500 if OE pairing or the 1-relay bit fails.
+
+| Item | v1 |
+| --- | --- |
+| Expected populated DPDT | **~315–360** |
+| Planned BOM / spare envelope | **~450** (comfortable &lt;550) |
+| Register/bus relays | **165** (110 storage + 55 OE) |
+| ALU relays | **~90** expected (65–132 range) |
+| PC acceleration | **16** incrementer + **8** address select = **24** |
+| Other fast paths | **0** |
+| Avg µsteps/instruction (BASIC / Contiki) | **~13** (was ~30–33) |
+| BASIC | ~13 µsteps/ins; **~6 IPS** conservative mixed timing; **~8 IPS** likely |
+| Contiki | same band; idle loop still branch-heavy but FETCH is 2 rows |
+| Conservative relay timing | FAST/MEM 12 ms, LOGIC 15 ms, ADD 30 ms |
+| Likely optimized timing | FAST/MEM 8 ms, LOGIC 10 ms, ADD 20 ms |
+| Power (5 V, 40 mA class) | Storage 1s: ~2 A typical, ~4 A all-ones architectural bits; ADD peak +ALU coils ~3 A; **plan a 5 V / 10 A coil supply (~50 W)** plus logic PSU. Latching BOM is the power escape hatch. |
+| Biggest remaining risks | (1) 1-relay bit hold/release with suppression; (2) bus contention/bounce; (3) contact-carry noise/voltage drop; (4) static coil heat/noise; (5) microcode retarget bugs when FETCH is shortened — mitigated by keeping the current emulator as reference until experiments pass. |
+
+Hard ceiling 800: do not go there. If 1-relay bits fail, 2-relay storage → ~425 populated + envelope **~500–550**, still one ALU, still Design B datapath.
+
+---
+
+## Part 19 — Construction implications (NEW build order)
+
+Do **not** order hundreds of relays until experiments 1–6 pass. Silicon bus buffers may be used on the bench as a **debug tap**, not as the intended CPU source mux.
+
+| # | Experiment | Relays | Success |
+| --- | --- | --- | --- |
+| 1 | Single stored bit: self-hold, SET, RESET, LOAD=0 retention, LED, diode vs zener release | 1 | Holds 1 for minutes; LOAD 0 then 1 then 0 retains; RESET releases within budgeted ms; no drop-out from bounce |
+| 2 | 2-bit DPDT OE onto a dummy bus | 1 storage×2 + 1 OE | Bits appear only when OE=1; Hi-Z when 0; no sneak path |
+| 3 | 8-bit register (storage + 4 OE) | 12 | LOAD byte from switches; OE onto bus; lamps match |
+| 4 | Two registers, contention | 24 | Φ0 both OE off; Φ1 one-hot; overlapping OE must be **detectably wrong** (current spike or XOR lamps) so we never ship that |
+| 5 | 1-bit adder (invert_b, sum, cout) | ~5–9 | Truth table A,B,Cin; no coil-sequenced cin |
+| 6 | Carry propagation: force all P=1, inject G at bit 0, watch bit 7 | slice + chain | Cout at MSB without **per-bit extra operate**; settle measured |
+| 7 | 4-bit adder | ~30–40 | `$F+$1` and `$0+$0`; time vs 1-bit |
+| 8 | 8-bit adder | ALU slice card | Matches `ALUCard` ADD/ADC/invert_b; ADD-class time **&lt;30 ms** conservative |
+| 9 | 16-bit PC incrementer | 16 + 16 PC storage | `$00FF`→`$0100`; `$FFFF`→`$0000`; stable during LOAD |
+| 10 | PC vs MAR address select | 8 + PC + MAR | SRAM reads PC while MAR holds a different EA; then MAR path for STA |
+
+After 1–4: register cards. After 5–8: ALU card. After 9–10: fetch rewrite is allowed in the emulator. Then IR+EEPROM of `LDA #`, monitor, Contiki.
+
+---
+
+*End of performance-optimized architecture. Reverse-engineering Steps 1–16 above remain the description of the **current** emulator.*
