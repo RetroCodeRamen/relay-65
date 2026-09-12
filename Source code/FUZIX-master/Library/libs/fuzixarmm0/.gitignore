@@ -1,6 +1,0 @@
-# Everything..
-*
-# ..except ourself
-!.gitignore
-# ..and this
-!syscall_ret.S

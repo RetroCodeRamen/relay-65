@@ -10,6 +10,7 @@ venv/
 
 # Upstream clones / toolchains (have their own remotes; re-clone as needed)
 third_party/
+Source code/
 
 # Build artifacts
 *.o
@@ -18,8 +19,5 @@ third_party/
 *.map
 obj_relay65/
 *.relay65
-
-# Generated FUZIX disk images
-Source code/FUZIX-master/Images/
 **/parttab.64M
 
