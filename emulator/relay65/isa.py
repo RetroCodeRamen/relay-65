@@ -1,8 +1,8 @@
 """6502 execute microprograms: EEPROM contents for the Control card.
 
-FETCH lives in cpu.py (shared sequencer page). Every helper here is a
-list of control words that only move bytes on the one internal bus and
-the one ALU — the same reuse the relay CPU will have.
+FETCH lives in the shared sequencer page. Opcode and operand fetches use
+PC on A[15:0] plus a dedicated 16-bit incrementer (Design B). The general
+ALU still does ADC, EA, SP, INX, and branches.
 """
 
 from __future__ import annotations
@@ -39,17 +39,8 @@ def mdr_write() -> list[CW]:
 
 
 def pc_inc() -> list[CW]:
-    """PC ← PC+1 using the ALU, not a dedicated incrementer."""
-    return [
-        xfer(Src.PCL, Dst.ALU_A),
-        xfer(Src.CONST, Dst.ALU_B, 1),
-        alu(AluOp.ADD),
-        xfer(Src.ALU, Dst.PCL),
-        xfer(Src.PCH, Dst.ALU_A),
-        xfer(Src.CONST, Dst.ALU_B, 0),
-        alu(AluOp.ADC, cin=Cin.LATCH),
-        xfer(Src.ALU, Dst.PCH),
-    ]
+    """PC ← PC+1 on the dedicated incrementer (Φ2 LOAD). Does not touch P."""
+    return [CW(pc_inc=True)]
 
 
 def sp_dec() -> list[CW]:
@@ -75,7 +66,11 @@ def mar_stack() -> list[CW]:
 
 
 def fetch_byte() -> list[CW]:
-    return pc_to_mar() + mem_to_mdr() + pc_inc()
+    """Operand fetch: PHASE1 PC→memory→MDR (inc evaluates); PHASE2 PC←PC+1."""
+    return [
+        CW(src=Src.MEM, dst=Dst.MDR, mem_rd=True, addr_pc=True),
+        CW(pc_inc=True),
+    ]
 
 
 def pass_to(dst: Dst, flags: int = 0) -> list[CW]:
@@ -103,7 +98,11 @@ def add8(dst_hi: Dst, dst_lo: Dst, src_add: Src) -> list[CW]:
 
 
 def FETCH() -> list[CW]:
-    return pc_to_mar() + mem_to_mdr() + [xfer(Src.MDR, Dst.IR)] + pc_inc()
+    """Opcode fetch: PHASE1 PC→memory→IR; PHASE2 PC←PC+1. Then EXEC."""
+    return [
+        CW(src=Src.MEM, dst=Dst.IR, mem_rd=True, addr_pc=True),
+        CW(pc_inc=True),
+    ]
 
 
 def RESET() -> list[CW]:

@@ -42,6 +42,7 @@ class CPU:
         self.microcycles = 0
         self.instructions = 0
         self.last_bus = 0
+        self.last_addr = 0
         self.nmi_edge = False
 
     @property
@@ -86,7 +87,8 @@ class CPU:
         return (
             f"A={self.reg.a:02X} X={self.reg.x:02X} Y={self.reg.y:02X} "
             f"SP={self.reg.sp:02X} PC={self.addr.pc:04X} P={self.reg.p:02X} "
-            f"IR={self.addr.ir:02X} MAR={self.addr.mar:04X} {self.state} "
+            f"IR={self.addr.ir:02X} MAR={self.addr.mar:04X} "
+            f"ABus={self.last_addr:04X} {self.state} "
             f"u={self.ustep} Φ{self.phi}"
         )
 
@@ -220,8 +222,12 @@ class CPU:
         if src == Src.ALU:
             return self.alu.result
         if src == Src.MEM:
-            return self.memory.read(self.addr.mar)
+            return self.memory.read(self._mem_ea(cw))
         return 0
+
+    def _mem_ea(self, cw: CW) -> int:
+        """System A[15:0]: PC when ADDR_PC, else MAR (EA / stack / vectors)."""
+        return self.addr.pc if cw.addr_pc else self.addr.mar
 
     def _load(self, dst: Dst, value: int, mem_wr: bool) -> None:
         value &= 0xFF
@@ -262,8 +268,10 @@ class CPU:
             self.memory.write(a.mar, value)
 
     def _phi1(self, cw: CW) -> None:
-        if cw.mem_rd:
-            bus = self.memory.read(self.addr.mar)
+        if cw.mem_rd or cw.src == Src.MEM:
+            ea = self._mem_ea(cw)
+            self.last_addr = ea
+            bus = self.memory.read(ea)
         else:
             bus = self._drive(cw)
         self.last_bus = bus
@@ -279,8 +287,13 @@ class CPU:
         if cw.src == Src.ALU:
             bus = self.alu.result
             self.last_bus = bus
+        if cw.mem_wr:
+            self.last_addr = self._mem_ea(cw)
         if cw.dst != Dst.NONE or cw.mem_wr:
             self._load(cw.dst, bus, cw.mem_wr)
+        if cw.pc_inc:
+            # After the memory sample so fetch sees the pre-increment PC.
+            self.addr.pc = (self.addr.pc + 1) & 0xFFFF
 
     def run(self, max_instructions: int | None = None) -> None:
         while not self.halted:

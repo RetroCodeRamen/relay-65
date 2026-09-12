@@ -20,7 +20,7 @@ microcode and this document together.
 | --- | --- | --- |
 | Internal datapath | **One** 8-bit bus | Fewer backplane pins and fewer bus-driver relays. Time-multiplex everything onto it. |
 | ALU | **One** 8-bit ALU, reused for everything | Relays are expensive; cycles are cheap. |
-| PC increment | **No** dedicated incrementer; ALU adds 1 to PCL/PCH | Same ALU as ADC/SBC and indexed addressing. |
+| PC increment | **Dedicated 16-bit +1** (`CW.pc_inc`); fetch uses **PC on A[15:0]** (`CW.addr_pc`) | Software-invisible microcode substitution (Design B). ALU still does EA/SP/INX. |
 | SP increment | Same ALU | Identical 8-bit inc/dec sequence as INX, just targeting SP. |
 | Shifts | Inside the ALU | ASL/LSR/ROL/ROR are ALU ops, not a second shifter card. |
 | Temporaries | Relay-visible: IR, MDR, MAR, T, ALU_A, ALU_B | Needed for sequencing; still observable. |
@@ -71,7 +71,7 @@ This is what peripherals see. It is **not** a 6502 chip pinout.
 
 | Signal | Owner | Notes |
 | --- | --- | --- |
-| A[15:0] | Address card (MAR) | Stable for the whole memory phase |
+| A[15:0] | Address card | MAR for EA/stack/vectors; **PC** when `ADDR_PC` (opcode/operand fetch) |
 | D[7:0] | Memory or CPU MDR | Shared with internal bus during MEM_RD/MEM_WR, or buffered later |
 | MEM_RD | Control | Active after settle; memory/UART drive data |
 | MEM_WR | Control | Active after settle; memory/UART sample data |
@@ -124,23 +124,17 @@ SBC is ADC with ALU_B inverted (XOR $FF) and carry-in from P.C — same adder.
 CMP is SBC that loads flags but does not write A.
 INC is ADD with CONST 1. DEC is ADD with CONST $FF.
 
-**PC increment** (every instruction fetch) is eight microsteps:
+**PC increment** on opcode/operand fetch (and RTS) is a dedicated 16-bit
+incrementer, one microstep, Φ2 LOAD after the memory sample:
 
 ```
-PCL → ALU_A
-CONST 1 → ALU_B
-ALU ADD          ; C_latch := carry
-ALU → PCL
-PCH → ALU_A
-CONST 0 → ALU_B
-ALU ADC          ; uses C_latch
-ALU → PCH
+ADDR_PC; MEM_RD → IR or MDR     ; PHASE 1 (A[15:0] = PC; inc evaluates)
+PC ← PC + 1                     ; PHASE 2 (does not touch P)
 ```
 
-Indexed addresses (`abs,X`, `(zp),Y`, …) use the same sequence with X/Y instead
-of CONST 1.
-
-That reuse is the point of the machine: you solder **one** 8-bit adder.
+Indexed addresses (`abs,X`, `(zp),Y`, …) still use the **general ALU**
+(`add8`) with X/Y. SP±1 still uses the ALU. That reuse remains the machine:
+you solder **one** 8-bit adder plus a thin PC+1 network.
 
 ---
 
@@ -179,19 +173,17 @@ address is `{IR[7:0], uStep[5:0]}` (64 rows per opcode). Unused rows are
 | 3 | END_IF[3:0] |
 | 4 | CONST |
 | 5 | P_OR (B/U when pushing P) |
-| 6–7 | reserved 0 |
+| 6 | ADDR_PC[0], PC_INC[1]; rest 0 |
+| 7 | reserved 0 |
 
 1. **FETCH** — shared. Not stored per opcode.
 2. **EXECUTE** — indexed by IR and uStep.
 
-FETCH:
+FETCH (two settled phases, Design B):
 
 ```
-MARL ← PCL
-MARH ← PCH
-MEM_RD → MDR
-IR   ← MDR
-PC   ← PC + 1     (ALU sequence above)
+ADDR_PC; MEM_RD → IR
+PC ← PC + 1
 ```
 
 Then `uStep := 0` and EEPROM address becomes IR.

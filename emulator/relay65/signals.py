@@ -120,6 +120,8 @@ class CW:
     # When pushing P, OR this onto the bus (B+U for PHP/BRK).
     p_or: int = 0
     invert_b: bool = False  # invert ALU_B before ADD (SBC/CMP)
+    addr_pc: bool = False  # A[15:0] = PC (fetch); else MAR
+    pc_inc: bool = False  # dedicated 16-bit PC ← PC+1 on Φ2 (after mem)
 
     def pack(self) -> bytes:
         """Eight EEPROM bytes. Layout is frozen in docs/RELAY-CPU.md §6."""
@@ -132,7 +134,8 @@ class CW:
         )
         b2 = (self.flags & 0x0F) | (int(self.end) << 4) | (int(self.invert_b) << 5)
         b3 = int(self.end_if) & 0x0F
-        return bytes([b0, b1, b2, b3, self.const & 0xFF, self.p_or & 0xFF, 0, 0])
+        b6 = int(self.addr_pc) | (int(self.pc_inc) << 1)
+        return bytes([b0, b1, b2, b3, self.const & 0xFF, self.p_or & 0xFF, b6, 0])
 
     @classmethod
     def unpack(cls, raw: bytes) -> CW:
@@ -151,6 +154,8 @@ class CW:
             end_if=Cond(raw[3] & 0x0F),
             const=raw[4],
             p_or=raw[5],
+            addr_pc=bool(raw[6] & 0x01),
+            pc_inc=bool(raw[6] & 0x02),
         )
 
 

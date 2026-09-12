@@ -1,8 +1,8 @@
 """PC / Address card: PCL, PCH, MAR, MDR, IR.
 
-A[15:0] on the system bus is always MAR, never live PC. Memory cycles
-require MAR to be loaded first (settle, then R/W). That is how the
-hardware will work; the emulator does not offer a shortcut.
+Opcode and operand fetches put **PC** on A[15:0] (`CW.addr_pc`). Effective
+address, stack, and vector cycles still load **MAR** first, then R/W.
+PC+1 is a dedicated incrementer (`CW.pc_inc`), not the general ALU.
 """
 
 from __future__ import annotations

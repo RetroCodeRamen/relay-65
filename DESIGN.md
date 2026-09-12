@@ -65,7 +65,7 @@ The baseline target is a documented 6502-compatible instruction set implemented 
 | Y register | Relay | Core architectural state. |
 | Stack pointer | Relay | Core architectural state; may share ALU for increment/decrement. |
 | Processor status | Relay / mixed | Flags should reflect relay datapath results; implementation may use support logic where justified. |
-| Program counter | Relay | 16-bit architectural state. Dedicated increment assistance remains under evaluation. |
+| Program counter | Relay | 16-bit architectural state. Dedicated +1 on fetch (emulator `CW.pc_inc`). |
 | Instruction register | Relay or relay-visible latch | Should make the currently executing opcode observable. |
 | Temporary/MDR/MAR state | Relay or mixed | Use only where needed to simplify sequencing and bus access. |
 | 8-bit ALU | Relay | Reusable arithmetic/logic block; central hardware investment. |

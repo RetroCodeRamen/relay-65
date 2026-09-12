@@ -23,7 +23,7 @@ class DatapathTests(unittest.TestCase):
         self.assertEqual(r, 0x11)
         self.assertEqual(alu.c_latch, 0)
 
-    def test_program_goes_through_mar_not_pc_index(self):
+    def test_ea_memory_uses_mar(self):
         img = assemble(
             """
             .org $0200
@@ -44,6 +44,35 @@ class DatapathTests(unittest.TestCase):
                 break
         self.assertEqual(m.memory.read(0x0010), 0x42)
         self.assertEqual(m.cpu.a, 0x42)
+
+
+    def test_fast_fetch_and_pc_inc_lengths(self):
+        from relay65.isa import FETCH, fetch_byte, pc_inc
+
+        self.assertEqual(len(FETCH()), 2)
+        self.assertEqual(len(fetch_byte()), 2)
+        self.assertEqual(len(pc_inc()), 1)
+        self.assertTrue(FETCH()[0].addr_pc)
+        self.assertTrue(pc_inc()[0].pc_inc)
+
+    def test_lda_imm_is_eight_microsteps(self):
+        img = assemble(
+            """
+            .org $0200
+            lda #$42
+            done: jmp done
+            """
+        )
+        m = Machine()
+        m.load_image(img.origin, img.data)
+        m.reset()
+        m.cpu.pc = 0x0200
+        m.cpu.state = "FETCH"
+        m.cpu.ustep = 0
+        m.cpu.step_instruction()
+        self.assertEqual(m.cpu.a, 0x42)
+        self.assertEqual(m.cpu.microcycles, 8)
+        self.assertEqual(m.cpu.pc, 0x0202)
 
 
 class IsaTests(unittest.TestCase):
@@ -331,6 +360,8 @@ class ControlStoreTests(unittest.TestCase):
             end_if=Cond.NZ,
             p_or=0x30,
             invert_b=True,
+            addr_pc=True,
+            pc_inc=True,
         )
         self.assertEqual(CW.unpack(cw.pack()), cw)
 
