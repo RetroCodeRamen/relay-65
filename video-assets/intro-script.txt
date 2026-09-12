@@ -1,0 +1,151 @@
+INTRO:
+
+A long time ago, I found Bill Buzbee’s Magic-1.
+
+And I remember looking at it and thinking: *Wait... you can just build a computer?*
+
+Not assemble one. Not buy a motherboard and put parts into a case. Actually build the thing — down at the logic level.
+
+Then I found Ben Eater. His breadboard CPU, his 6502 computer... and that idea just kind of lived in the back of my head for years.
+
+I wanted to do it.
+
+I also assumed I wasn't technically smart enough to do it.
+
+And, realistically, I didn't have the time anyway.
+
+Then about a year ago, I started building Nitro Core DX, my own fantasy game console. And somewhere along the way that project taught me something pretty important:
+
+With modern tools — and, yeah, a lot of help from AI — I can actually build this stuff.
+
+Which immediately created another problem.
+
+Because I've always wanted to build a computer out of something you can actually *see working.*
+
+Something physical.
+
+Something clicky.
+
+Relays.
+
+So naturally, despite the fact that Nitro Core DX is nowhere near finished — because apparently finishing projects is for other people — I started another one.
+
+This is Relay-65.
+
+The idea is to build a luggable, electromechanical 6502 computer where the CPU's instructions are actually executed by relays.
+
+No microcontroller hiding underneath pretending to be the processor.
+
+When this thing adds two numbers, I want to hear it adding two numbers.
+
+Eventually, I want Relay-65 to become a real little computer: its own console, running Contiki, and — if I can push this ridiculous idea far enough — FUZIX and a tiny web server.
+
+I have absolutely no idea how far I'm going to get.
+
+But we're going to build it anyway.
+
+And hopefully, by the end of this, I'll understand computers a hell of a lot better than I did when I started.
+
+
+------------------------------------------
+
+ARCHITECTURE (about two minutes)
+
+Okay. So here's how we're actually going to build it.
+
+I already told you it's a 6502 in relays. The question is: why that?
+
+I thought about faking the processor in an FPGA. Fast, tidy, and it would completely miss the point. If the "CPU" is a bitstream, I'm just making a very loud USB gadget.
+
+I thought about making *everything* out of relays — memory, serial, the lot. That's how you end up needing a shed, a three-phase outlet, and a divorce attorney.
+
+I thought about a "realer" CPU. Z80. 68000. More swagger. Also more pins, more state, more ways for me to get lost.
+
+6502 won because it's simple enough that I can *almost* hold the instruction set in my head.
+
+And because, if I'm being unreasonably ambitious, it can run Unix...
+
+Okay. FUZIX.
+
+It's a Unix-like OS that already boots on a 6502. It needs a C compiler, banked RAM, and a disk — which is exactly what we're building the hardware to look like. So when I say this box might serve a web page someday, I mean a slow, clicky, technically functional one. Probably slower than your old 300 baud modem from 1982.
+
+We're not building an entire computer out of relays. We're building the CPU out of relays. The registers, the ALU, the program counter — the parts that actually execute the program. RAM, ROM, serial, later a network card: those can be ordinary chips. Otherwise this thing never leaves the workbench.
+
+Relays are expensive. Cycles are cheap. So there's *one* eight-bit bus and *one* eight-bit ALU, reused for everything, including bumping the PC. Microcode lives in EEPROM; it just tells the relays what to do next. Memory is SRAM and ROM chips, because I am not storing BASIC in a warehouse of coils.
+
+Cards are on a passive backplane. CPU in one set of slots, gadgets in the others. The 6502 only sees a memory map. It does not know, and should not care, what's behind a window.
+
+I started with Contiki because it's small. It can boot BASIC. If that runs, the hardware actually works.
+
+And then the pièce de résistance: Unix.
+
+Okay. FUZIX.
+
+I am not implementing TCP/IP in clicky gates. The cable out of the box is an ESP32 in a slot — Wi-Fi, Ethernet, whatever it's good at — appearing as a dumb handful of registers. The relay CPU still asks for the bytes. The ESP32 just talks to the internet so I don't have to.
+
+If this works, you'll hear the machine think, and a browser somewhere will load a page that thought came from.
+
+If it doesn't, you'll still hear it think. That's already a win.
+
+
+------------------------------------------
+
+HOW IT WORKS:
+
+I said this is a 6502 in relays. That is a useful lie.
+
+There is no 6502 chip in this box. There is a machine that pretends — very slowly — to *be* one.
+
+So: what a 6502 even is, if you never had to care.
+
+It's a little eight-bit brain from 1975. It can remember a handful of bytes: A, X, Y, a stack pointer, some flags, and a sixteen-bit program counter that points at the next instruction in memory. Memory is just addresses. The CPU puts an address out, asks for a byte, and that byte is either "add this," or "jump there," or "the number seven."
+
+That's the whole job. Fetch a byte. Figure out what it meant. Do it. Fetch the next one. Over and over. Serial ports and bank switches are just more addresses — RAM with an attitude.
+
+A real MOS 6502 does that with a PLA and timing tricks baked into silicon. We don't have silicon. We have relays. Relays are terrible at "figure out what it meant." They're pretty good at "copy this byte onto a wire and latch it over there."
+
+So we cheated in the honest direction. We translated the entire instruction set into microcode.
+
+Microcode is a recipe. Each 6502 opcode — LDA, ADC, JMP, all of them — is not one magic operation. It's a list of tiny moves.
+
+Take LDA from an address. The *name* is "load the accumulator." The recipe is: put the program counter on the address bus. Read memory into a holding register. That's the opcode. Bump the PC. Read the next byte — low address. Bump the PC. Read the high address. Now go *there*, read the actual number, copy it into A, update the flags. Done. Go fetch again.
+
+Every one of those moves is one row in an EEPROM. Wide rows. Horizontal control words. The chips do not understand 6502. They just turn bits on: source is PCL, destination is MAR low. Source is memory, destination is the data register. Source is the ALU, destination is A. The relays do what the bits say. If the bits say ADD, the adder clicks. If they say copy, something copies.
+
+We only bought one eight-bit bus and one eight-bit ALU. Everything shares them. Want to add one to the program counter? Same adder that does ADC. Eight little steps: low byte plus one, maybe a carry into the high byte. Every. Single. Instruction. Fetch. That's why this thing is going to sound like a typewriter having a panic attack, not like a CPU.
+
+Indexed addressing is the same trick with X or Y instead of the constant one. Subtract is add with the bits flipped. Compare is subtract where we keep the flags and throw away the answer. I'm not building a second computer for the clever ops. I'm wasting time so I don't waste coils.
+
+Clocking is not a megahertz joke. Relays have to move metal. We wait for the contacts to settle, then we latch. Two phases per microstep. Call it twenty milliseconds if we're being kind to the coils. A real 6502 fetched an instruction in a couple of microseconds. We will fetch an instruction like we're filling out a form in triplicate.
+
+Same answer in A when we're done. Not the same number of cycles. I don't care. Software shouldn't either, as long as the registers and memory look like a 6502 when it looks.
+
+There's a shared FETCH program so we don't store "go get the next opcode" two hundred and fifty-six times. Then the instruction register becomes part of the EEPROM address, and we walk that opcode's list until a bit says END. Then fetch again.
+
+If we hit an opcode we never wrote, we jam. The lights freeze. That's a feature. I'd rather see a dead machine than a silent NOP pretending everything's fine.
+
+That's the computer. That's how a 1975 instruction set fits in a pile of relays that can barely add. We didn't shrink the 6502.
+
+We stretched it out in time until it was small enough to build.
+
+Before we run, we walk.
+
+Making a computer is fantastic. Here's the problem: how do you know the computer works if you don't have software for it? And how do you write software for it if you don't have a computer?
+
+That's where emulation comes in.
+
+I wrote an emulator — with a lot of help from Cursor — of *this* machine. Not a generic 6502 with a coat of paint. It walks the same microcode, the same bus moves, the same format the hardware is supposed to use. If LDA works in the emulator, the relays are supposed to do LDA the same way.
+
+That buys two things.
+
+One: it costs nothing to run. We can get the emulator working, get the software working — Contiki, BASIC, the monitor — before we spend a dime on parts.
+
+Two: when we *do* spend the dime, we have a picture of what should be happening. Same sources, same destinations, same adder, same settle. We can look at the real box and ask: is it doing that, right on time?
+
+If it is, we built the computer.
+
+If it isn't, we know which recipe went wrong — instead of staring at a pile of clicking metal and guessing.
+
+
+------------------------------------------
+

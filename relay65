@@ -1,0 +1,15 @@
+#!/usr/bin/env python3
+"""Run from the repo root:  ./relay65 --gui --load software/cc65/hello.bin"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT / "emulator"))
+
+from relay65.__main__ import main
+
+if __name__ == "__main__":
+    raise SystemExit(main())

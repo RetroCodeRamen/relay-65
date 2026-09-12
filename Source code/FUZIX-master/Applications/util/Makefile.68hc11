@@ -1,0 +1,2 @@
+APPOTHER=fforth
+include Makefile.common

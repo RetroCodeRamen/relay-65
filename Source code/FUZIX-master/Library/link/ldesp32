@@ -1,0 +1,34 @@
+#!/bin/bash
+#
+#	Wrap the ESP32 binutils. Not much is needed, just the final
+#	binary conversion
+#
+TARGET=a.out
+
+ARGS=""
+#
+#	Find the target and strip out the -o foo option
+#
+while [[ $# -gt 0 ]]
+do
+	case "$1" in
+	-o)
+	TARGET="$2"
+	shift
+	shift
+	;;
+	-s)
+	STACK="$2"
+	shift
+	shift
+	;;
+	*)
+	ARGS+=' '"$1"
+	shift
+	;;
+esac
+done
+
+xtensa-esp32-elf-ld $ARGS -o "$TARGET.bin"
+$FUZIX_ROOT/Library/tools/elf2bin -p xtensa-esp32-elf -o "$TARGET" "$TARGET.bin"
+rm -f "$TARGET.bin"

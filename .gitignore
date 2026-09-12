@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+*.bin
+!emulator/rom/*.bin
+.pytest_cache/
+.mypy_cache/
+
+# Upstream clones / toolchains (have their own remotes; re-clone as needed)
+third_party/
+
+# Build artifacts
+*.o
+*.a
+*.elf
+*.map
+obj_relay65/
+*.relay65
+
+# Generated FUZIX disk images
+Source code/FUZIX-master/Images/
+**/parttab.64M
+

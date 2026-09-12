@@ -1,0 +1,3 @@
+ENDIAN = -x
+include Makefile.common
+
