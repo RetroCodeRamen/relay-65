@@ -9,7 +9,8 @@ Keyboard (this terminal):
   O      DEPOSIT NEXT
   R      RUN
   S      STOP
-  space  single-step one 6502 instruction
+  space  STEP ROW — one EEPROM word (one coil phase)
+  K      STEP OP  — one 6502 instruction
   T      cycle SPEED (RELAY → 1s=1min → WARP)
   Q      quit
 """
@@ -18,8 +19,6 @@ from __future__ import annotations
 
 import select
 import sys
-import termios
-import tty
 
 from .leds import sample
 from .panelops import deposit, deposit_next, examine, examine_next
@@ -35,15 +34,21 @@ class FrontPanel:
         self._old = None
 
     def enter_cbreak(self) -> None:
-        if not sys.stdin.isatty():
+        if sys.platform == "win32" or not sys.stdin.isatty():
             return
+        import termios
+        import tty
+
         self._old = termios.tcgetattr(sys.stdin)
         tty.setcbreak(sys.stdin.fileno())
 
     def leave_cbreak(self) -> None:
-        if self._old is not None:
-            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self._old)
-            self._old = None
+        if self._old is None:
+            return
+        import termios
+
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self._old)
+        self._old = None
 
     def render(self) -> str:
         lamps = sample(self.machine)
@@ -60,7 +65,7 @@ class FrontPanel:
                 self.machine.clock.runtime_label() + f"  {self.machine.clock.label()}",
                 f"SW A {sw_a.replace('1', '^').replace('0', '_')}  ${self.sw_addr:04X}",
                 f"SW D {sw_d.replace('1', '^').replace('0', '_')}          ${self.sw_data:02X}{hint}",
-                "Axxxx Dxx  E examine  N next  P deposit  O dep-next  R run  S stop  T speed  SPACE step  I reset  Q quit",
+                "Axxxx Dxx  E examine  N next  P deposit  O dep-next  R run  S stop  T speed  SPACE step-row  K step-op  I reset  Q quit",
                 "Serial is the other connector (TCP --serial-port, default 6502).",
             ]
         )
@@ -115,6 +120,9 @@ class FrontPanel:
         elif up == "S":
             self.machine.running = False
         elif ch == " ":
+            self.machine.running = False
+            self.machine.step_micro()
+        elif up == "K":
             self.machine.running = False
             self.machine.step_instruction()
         elif up == "I":

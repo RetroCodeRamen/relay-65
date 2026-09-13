@@ -4,7 +4,7 @@ Python model of the **relay CPU**, not a shortcut 6502 interpreter.
 
 Each 6502 instruction is a list of micro-ops on **one 8-bit bus** through **one ALU**. Packed EEPROM rows (`CW`) are the control card. Modules in `relay65/` are the cards.
 
-Project overview, memory map, and how to run Contiki/BASIC/FUZIX: **[README.md](../README.md)**. Hardware contract: **[docs/RELAY-CPU.md](../docs/RELAY-CPU.md)**. Physical Design B (PC+1, relay bus OE) is specified in **[RELAY65_HARDWARE_IMPLEMENTATION.md](../RELAY65_HARDWARE_IMPLEMENTATION.md)**; the emulator microcode uses ADDR_PC + hardware PC+1 for fetch.
+Project overview, memory map, and how to run Contiki/BASIC/FUZIX: **[README.md](../README.md)**. Hardware contract: **[docs/RELAY-CPU.md](../docs/RELAY-CPU.md)**. Physical Design B (PC+1, ADDR_SP, 8-bit ±1, relay bus OE) is specified in **[RELAY65_HARDWARE_IMPLEMENTATION.md](../RELAY65_HARDWARE_IMPLEMENTATION.md)**; the emulator control store already uses those bits. Coil times for Clack: **[docs/TIMING.md](../docs/TIMING.md)**.
 
 ## Run
 
@@ -29,23 +29,24 @@ The last command boots the monitor ROM at `$E000`. Type on the host keyboard; th
 
 ## Lamps and two consoles
 
-**Serial** is the Teletype. **Lamps/switches** are the front panel.
+**Serial** is the Teletype. **Lamps** are two banks: MACHINE (MAR / bus / IR / sequencer) and 6502 (A X Y SP P PC).
 
-`*` = lamp on, `.` = lamp off. ADDR is MAR (A[15:0]), DATA is the last bus byte, IR is the instruction register.
+`*` = lamp on, `.` = lamp off. MAR is the address register (not always the live fetch address). BUS is the last internal-bus byte. IR is the opcode.
 
 ```bash
 # lamps + serial, relay-timed clock (~20 ms/microstep)
 ./relay65 --gui --load software/cc65/hello.bin
 # click RUN. SPEED cycles RELAY (coils) → 1s=1min (60×) → WARP (host max). HOST/REAL clocks show PC time vs relay time.
+# STEP ROW = one EEPROM word. STEP OP = one 6502 instruction.
 
-./relay65 --gui --overclock --run --load software/contiki/hello-world.bin
+./relay65 --gui --overclock --run --load software/images/console.bin
 ```
 
 If tkinter is missing, the GUI is the browser at `http://127.0.0.1:8065` (green SERIAL box). UART is also copied to the launching terminal.
 
 `--panel` is a text front panel; serial is TCP (`nc 127.0.0.1 6502` by default).
 
-Panel keys: `A`+hex EXAMINE address, `D`+hex data, `E` examine, `P` deposit, `R` run, `S` stop, space = step, `I` reset.
+Panel keys: `A`+hex address, `D`+hex data, `E` examine, `P` deposit, `R` run, `S` stop, space = STEP ROW, `K` = STEP OP, `I` reset.
 
 `--trace` prints register/IR/MAR/microstep state. `--dump-microcode` writes packed FETCH/RESET/IRQ/NMI/execute images. `--leds` prints Altair-style lamps on stderr.
 
@@ -54,6 +55,8 @@ Build Contiki with `make -C software/contiki` (needs the `contiki` tree and cc65
 ## What is intentionally slow
 
 Opcode/operand fetch is Design B: ADDR_PC plus a dedicated PC+1, packed into one EEPROM row (Φ2 loads IR/MDR and PC together). Stack uses ADDR_SP; INX/Y and SP±1 use an 8-bit incrementer. Indexed addressing still shares the one 8-bit ALU. Software-visible PC, memory, and flags stay the same.
+
+On that clock, Clack boots in **1 min 55 s** and the first `ls` takes **38 s** ([docs/TIMING.md](../docs/TIMING.md)). `--overclock` is for the host PC, not a faster relay machine.
 
 ## Memory map (v0.1)
 

@@ -11,20 +11,27 @@ The Python emulator under `emulator/` is the **behavioral reference**. Contiki (
 | ISA / binaries | Official NMOS 6502; illegal opcodes jam. cc65 `--cpu 6502` only (no 65C02). |
 | Emulator | Microcoded 8-bit bus, one ALU, packed EEPROM control words. Design B fetch is ADDR_PC + hardware PC+1 in **one** µstep per opcode/operand byte. Stack uses ADDR_SP; INX/Y/SP use an 8-bit +1/−1 helper. Indexed EA still uses the ALU. |
 | Software | Monitor at `$E000`. Contiki console + BASIC. FUZIX kernel bring-up (CF boot, not a finished Unix box). TCP stays on the ESP32 mailbox, not uIP on the 6502. |
-| Hardware v1 | **Design B** in [RELAY65_HARDWARE_IMPLEMENTATION.md](RELAY65_HARDWARE_IMPLEMENTATION.md): relay storage and bus routing, dedicated PC+1 + PC/MAR address select, contact-mode ALU carry. Expected **~315–360 populated DPDT**, BOM envelope **~450**. Fast fetch is a **microcode substitution**; software must not notice. |
+| Hardware v1 | **Design B** is in the emulator: ADDR_PC, hardware PC+1, ADDR_SP, 8-bit ±1, packed fetch. Physical boards are not built. Envelope **~450 DPDT** (populated a bit above the old 315–360 once stack/INX helpers are counted). |
 
 ## Design rules
 
 1. The emulator is the hardware contract. If the emulator does it, the relay CPU does it.
 2. Relays hold and route CPU data and perform ALU work. Silicon sequences coils and stores memory.
-3. Spend relays on fetch/PC: traces show **~50% of microsteps** are `pc_inc`. Do not duplicate the ALU to go faster.
+3. Spend relays on fetch, stack, and INX/Y — they run on every hot path. Do not duplicate the ALU to go faster.
 4. Prefer real speed, an electromechanical datapath, and a buildable relay count over a 220-relay silicon-bus minimum.
 
-Philosophy and card-cage intent: [DESIGN.md](DESIGN.md). Frozen emulator/hardware contract: [docs/RELAY-CPU.md](docs/RELAY-CPU.md). OS map: [docs/OS-BRINGUP.md](docs/OS-BRINGUP.md).
+Philosophy and card-cage intent: [DESIGN.md](DESIGN.md). Frozen emulator/hardware contract: [docs/RELAY-CPU.md](docs/RELAY-CPU.md). OS map: [docs/OS-BRINGUP.md](docs/OS-BRINGUP.md). Coil times: [docs/TIMING.md](docs/TIMING.md).
 
 ## Quick start
 
-Python 3. No extra packages for the core emulator. `--gui` uses tkinter, or a browser panel at `http://127.0.0.1:8065` if tkinter is missing.
+Python 3. No extra packages for the core emulator. `--gui` uses tkinter (same
+front panel as the browser UI), or a browser panel at `http://127.0.0.1:8065`
+if tkinter is missing.
+
+**Download (Windows / Linux):** GitHub Actions builds `Relay-65.exe` and
+`Relay-65`. Double-click: Clack loads, warp clock, RUN. Type in the serial
+pane. Rebuild those binaries with `pyinstaller pack/relay65.spec` (needs
+`software/images/console.bin`).
 
 ```bash
 # tests
@@ -34,7 +41,13 @@ cd emulator && python3 -m unittest discover -s tests -v
 ./relay65 --overclock --max 20000
 
 # front panel (lamps + serial). START is STOP unless --run
-./relay65 --gui --overclock --run --load software/contiki/hello-world.bin
+./relay65 --gui --overclock --run --load software/images/console.bin
+```
+
+Windows (from a checkout, Python from python.org):
+
+```text
+py -3 relay65 --gui --overclock --run --load software/images/console.bin
 ```
 
 `--overclock` skips millisecond coil waits (needed to use Contiki/BASIC on a PC). Default timing is ~20 ms per microstep. `--minute` (or SPEED on the panel) runs 60×: one PC second = one minute of relay time.
@@ -46,6 +59,8 @@ Panel: `R` run, `S` stop, space step, `I` reset, `A`+hex examine address, `D`+he
 | Path | What |
 | --- | --- |
 | `./relay65` | Run the emulator from the repo root |
+| `pack/` | PyInstaller spec for Windows/Linux desktop binaries |
+| `software/images/` | Shipped Clack image (`console.bin`) for downloads |
 | `emulator/` | CPU, ALU, memory, UART, CF, ESP32 mailbox, panel/GUI |
 | `emulator/rom/monitor.s` | Front-panel monitor (assembled at run time) |
 | `software/cc65/` | Bare-metal crt0, UART write, `relay65.cfg` |
@@ -62,7 +77,7 @@ Upstream Contiki/FUZIX/cc65 are **not** in git. Clone or unpack them locally so 
 ```bash
 make -C software/cc65
 make -C software/contiki hello          # hello-world.bin
-make -C software/contiki                # console.bin + BASIC
+make -C software/contiki                # console.bin + BASIC (also software/images/console.bin)
 make -C software/fuzix kernel           # needs cl65 on PATH
 ```
 
@@ -91,14 +106,14 @@ C programs load at `$0200`. IRQ/NMI ROM vectors `JMP ($00F0)` / `JMP ($00F2)`. D
 
 **Monitor** — dump/deposit/go, `f` CF boot. RESET always hits ROM; `--fuzix` inserts CF + jumper, it does not poke PC.
 
-**Contiki** — no IPv6/uIP on the 6502. Daily OS. The shell is **Clack** (`help`, `ls`, `man`, `edit`, `basic`, `time`, `peek`/`poke`). Type in the GUI serial pane.
+**Contiki** — no IPv6/uIP on the 6502. Daily OS. The shell is **Clack** (`help`, `ls`, `man`, `edit`, `basic`). Type in the GUI serial pane. On the 20 ms coil clock, boot to `_>` is **1 min 55 s**; first `ls` is **38 s**. See [docs/TIMING.md](docs/TIMING.md).
 
 **BASIC** — integer Tiny BASIC subset started from Clack (`PRINT`, `LET`, `RUN`, `PEEK`/`POKE`, `BYE`).
 
 **FUZIX** — NMOS 6502 platform; kernel can sign on and wait at `bootdev:`. Root filesystem / `/init` are still bring-up work. See `fuzix/Kernel/platform/platform-relay65/README.md`.
 
 ```bash
-./relay65 --gui --overclock --run --load software/contiki/console.bin
+./relay65 --gui --overclock --run --load software/images/console.bin
 ./relay65 --gui --overclock --run --fuzix fuzix/Kernel/fuzix.bin
 ```
 
@@ -108,21 +123,24 @@ Profile microstep mix (does not change CPU behavior):
 PYTHONPATH=emulator python3 emulator/tools/profile_workloads.py
 ```
 
-## Hardware direction (not in the emulator yet)
+## Hardware direction
 
-The running CPU copies PC→MAR and adds 1 through the general ALU (8 rows). Traces of real Contiki/BASIC show that path is about **half of all time**.
+The emulator **is** Design B microcode: packed ADDR_PC + PC+1 fetch, ADDR_SP,
+8-bit ±1 for INX/Y/SP, ALU A-from-bus on taken branches. Software-visible
+6502 results did not change. Physical boards still need the bit-cell and
+contact-carry bench experiments in [RELAY65_HARDWARE_IMPLEMENTATION.md](RELAY65_HARDWARE_IMPLEMENTATION.md).
 
-Planned v1 physical CPU (Design B):
+Still ahead of the solder (not missing in the emulator):
 
 - 1 DPDT per stored bit (hold + MOSFET LOAD), **if** the bit-cell experiment passes
 - Relay output-enable onto the internal bus (4 DPDT per 8-bit source)
-- 16-bit PC incrementer (~16 DPDT) + PC vs MAR address select (8 DPDT)
-- Two-phase fetch: PC drives memory while PC+1 evaluates, then load IR and PC
 - Contact-mode carry (not eight sequential coil ripples)
 - Variable microcycle classes so ADD does not slow every transfer
-- **One** ALU; no second adder, no INX helper in v1
+- **One** ALU; no second adder
 
-Do not retarget emulator microcode until the first ten bench experiments in the hardware document pass.
+The old “do not retarget microcode until experiments pass” line is obsolete.
+The control store already matches the intended boards. Changing packing later
+is still a microcode substitution software cannot see.
 
 ## Documentation
 
@@ -131,5 +149,6 @@ Do not retarget emulator microcode until the first ten bench experiments in the 
 | [DESIGN.md](DESIGN.md) | Why it is a relay computer; card cage; build philosophy |
 | [docs/RELAY-CPU.md](docs/RELAY-CPU.md) | Emulator = board contract (v0.1 microarchitecture) |
 | [docs/OS-BRINGUP.md](docs/OS-BRINGUP.md) | Ports, UART, CF boot, Contiki/FUZIX notes |
+| [docs/TIMING.md](docs/TIMING.md) | Measured Clack boot / `ls` / echo on the coil clock |
 | [RELAY65_HARDWARE_IMPLEMENTATION.md](RELAY65_HARDWARE_IMPLEMENTATION.md) | Datapath reverse-engineering + Design A/B/C relay budgets |
 | [emulator/README.md](emulator/README.md) | Emulator flags, lamps, tests |

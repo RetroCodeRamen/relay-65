@@ -19,9 +19,9 @@ microcode and this document together.
 | Topic | v0.1 decision | Why |
 | --- | --- | --- |
 | Internal datapath | **One** 8-bit bus | Fewer backplane pins and fewer bus-driver relays. Time-multiplex everything onto it. |
-| ALU | **One** 8-bit ALU, reused for EA, SP, ADC, INX | Relays are expensive; cycles are cheap. No second ALU. |
+| ALU | **One** 8-bit ALU, reused for EA, ADC, memory INC | Relays are expensive; cycles are cheap. No second ALU. |
 | PC increment | Dedicated PC+1 + ADDR_PC (Design B) | Packed with opcode/operand fetch: one EEPROM row, dual Φ2 LOAD. |
-| SP increment | Same general ALU | Identical 8-bit inc/dec sequence as INX, just targeting SP. |
+| SP increment | 8-bit REG_INC/DEC helper (shared with INX/Y/MARL) | Not the general ALU. ADDR_SP puts `$0100\|SP` on A[15:0]. |
 | Shifts | Inside the ALU | ASL/LSR/ROL/ROR are ALU ops, not a second shifter card. |
 | Temporaries | Relay-visible: IR, MDR, MAR, T, ALU_A, ALU_B | Needed for sequencing; still observable. |
 | Microcode | Horizontal control word in EEPROM | EEPROM outputs drive coil drivers almost directly. |
@@ -52,8 +52,8 @@ module is independently testable, matching DESIGN.md §13.
   | ALU               |  ALU_A, ALU_B latches, F-block, C latch, flags
   +------------------+
   +------------------+
-| PC / Address      |  PCL, PCH, MARL, MARH, MDR, IR
-+------------------+     A[15:0] = PC if ADDR_PC else MAR
+  | PC / Address      |  PCL, PCH, MARL, MARH, MDR, IR
+  +------------------+     A[15:0] = PC / $0100|SP / MAR
   +------------------+
   | Memory / System   |  SRAM, ROM, address decode, bank latch
   +------------------+
@@ -173,6 +173,8 @@ uses 6+4 ms. `--overclock` or the GUI OVERCLOCK switch runs as fast as the host.
 Front panel: HALT freezes the step counter; STEP runs one microstep; RUN
 lets the oscillator clock Φ1/Φ2. The emulator `--trace` is that panel.
 
+Measured Clack boot and `ls` on this clock: [docs/TIMING.md](TIMING.md).
+
 ---
 
 ## 6. Microcode organization (EEPROM)
@@ -250,8 +252,8 @@ $E000–$FFFF   ROM **reads** if $C016 bit0=1 (default); writes always SRAM
 
 **CompactFlash** `$C100–$C107`: 8-bit IDE task file. `--disk` is plugging a card in. Kernel image lives at LBA 1 on the card, not in a host poke of RAM.
 
-The CPU does not know about banks. It puts MAR on A[15:0]; the memory card
-maps it.
+The CPU does not know about banks. It puts A[15:0] on the system bus
+(PC, `$0100|SP`, or MAR); the memory card maps it.
 
 **UART** (I/O card, 6551-like subset, three registers):
 
@@ -308,8 +310,8 @@ this same monitor ROM.
 ## 10. What the emulator must not do
 
 - Interpret 6502 opcodes in Python instead of walking control words.
-- Read `ram[PC]` inside the CPU. Memory cycles use A[15:0] after ADDR_PC
-  (PC vs MAR) plus MEM_RD/MEM_WR.
+- Read `ram[PC]` inside the CPU. Memory cycles use A[15:0] after ADDR_PC /
+  ADDR_SP (PC vs stack vs MAR) plus MEM_RD/MEM_WR.
 - Extra architectural registers that firmware can see but hardware will not have.
 - Host-side boot shortcuts: poking PC to `$4002`, clearing `$C016` from Python, or
   `load_ram` of the kernel. `--fuzix` inserts a CF image; RESET still hits ROM.
@@ -320,17 +322,29 @@ When you add a real board, add it here first as a card class, then solder it.
 
 ## 11. Front panel lamps (v0.1)
 
-Physical lamps tap the backplane. The emulator prints them as `*` / `.`:
+The chassis has room for two lamp banks. Neither replaces the other.
+
+**MACHINE** taps the backplane (relay datapath):
 
 | Row | Signal |
 | --- | --- |
-| ADDR | MAR A15–A0 |
-| DATA | last D7–D0 on the internal bus |
-| IR | instruction register |
-| STAT | RUN, WAIT (STOP), I, IRQ, N Z C V, sequencer phase |
+| MAR | Address register A15–A0. Fetch drives PC on the system bus when ADDR_PC is on; these lamps still show MAR. |
+| BUS | Last D7–D0 on the internal bus |
+| IR | Instruction register (opcode) |
+| SEQ | RUN, WAIT (STOP), IRQ, sequencer state / Φ / uStep |
+
+**6502** taps architectural registers (what software sees):
+
+| Row | Signal |
+| --- | --- |
+| PC | Program counter |
+| A X Y SP | Accumulators / index / stack |
+| P | N V U B D I Z C. B is not stored; U is forced 1. |
+
+Front-panel clock: **STEP ROW** is one EEPROM word (Φ0/Φ1/Φ2). **STEP OP** is one 6502 instruction. EXAMINE / DEPOSIT use ADDR SW / DATA SW while STOP. Halt is a pin, not a memory-mapped register.
 
 Two access paths, same as the finished machine:
 
-- **`--gui`** — lamps, paddle switches, and a serial terminal in one window.
+- **`--gui`** — serial + both lamp banks + paddles.
 - **`--leds`** — `*` / `.` lamp strip on stderr, UART on stdout.
-- **`--panel`** — text panel; UART on TCP port 6502.
+- **`--panel`** — text panel; UART on TCP port 6502. Space = STEP ROW, `K` = STEP OP.

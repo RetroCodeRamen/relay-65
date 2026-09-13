@@ -63,9 +63,9 @@ The baseline target is a documented 6502-compatible instruction set implemented 
 | A accumulator | Relay | Core architectural state; heavily used. |
 | X register | Relay | Core architectural state. |
 | Y register | Relay | Core architectural state. |
-| Stack pointer | Relay | Core architectural state; may share ALU for increment/decrement. |
+| Stack pointer | Relay | Core architectural state; 8-bit +1/−1 helper, not the ALU. |
 | Processor status | Relay / mixed | Flags should reflect relay datapath results; implementation may use support logic where justified. |
-| Program counter | Relay | 16-bit architectural state. Dedicated increment assistance remains under evaluation. |
+| Program counter | Relay | 16-bit architectural state; dedicated PC+1 plus ADDR_PC. |
 | Instruction register | Relay or relay-visible latch | Should make the currently executing opcode observable. |
 | Temporary/MDR/MAR state | Relay or mixed | Use only where needed to simplify sequencing and bus access. |
 | 8-bit ALU | Relay | Reusable arithmetic/logic block; central hardware investment. |
@@ -249,9 +249,9 @@ The system should be built in independently testable layers. Each new card shoul
 - Expansion capability and reserved signals should be designed before the backplane is frozen.
 
 Emulator and hardware share one blueprint: [`docs/RELAY-CPU.md`](docs/RELAY-CPU.md).
-v0.1 freezes a single internal bus, one reused ALU (including PC/SP), and the
-memory map. The Python CPU walks EEPROM control words; it does not interpret
-opcodes in software.
+v0.1 freezes a single internal bus, one ALU for EA/ADC/RMW, dedicated PC+1 and
+an 8-bit ±1 helper for SP/INX/Y, and the memory map. The Python CPU walks
+EEPROM control words; it does not interpret opcodes in software.
 
 ## 15. Major Open Decisions
 
@@ -260,7 +260,7 @@ opcodes in software.
 - Number of CPU slots and number of general expansion slots.
 - Physical orientation: vertical card cage, horizontal stack, or hybrid service tray.
 - Internal bus topology: **frozen v0.1 — one shared 8-bit bus** (see docs/RELAY-CPU.md).
-- Program-counter increment hardware: **frozen v0.1 — reuse the 8-bit ALU**; dedicated +1 is a later microcode swap.
+- Program-counter increment hardware: **frozen — dedicated PC+1 + ADDR_PC**, packed into one fetch row. The general ALU is not used for PC+1.
 - Exact ALU function set: **ADD/ADC, AND, OR, XOR, PASS, ASL/LSR/ROL/ROR, BIT**; shifts live in the ALU.
 - Which temporary registers are true relay registers versus semiconductor support latches: **IR, MDR, MAR, T, ALU_A, ALU_B are relay-visible latches**.
 - Backplane electrical signaling levels and buffering strategy.
@@ -288,7 +288,8 @@ schematic-level contract:
 5. Relay characterization — not started; `CPU.step()` walks Φ0/Φ1/Φ2, `WallClock` still uses placeholder ms
 
 > **Design rule:** Do not change software-visible behavior in hardware without
-> changing the emulator first. Dedicated PC+1, if added, is a microcode swap.
+> changing the emulator first. PC+1, ADDR_SP, and REG_INC/DEC are already
+> microcode substitutions in the emulator.
 
 ## 17. Technical References and Inspiration
 

@@ -5,8 +5,13 @@ __pycache__/
 venv/
 *.bin
 !emulator/rom/*.bin
+!software/images/*.bin
 .pytest_cache/
 .mypy_cache/
+
+# Frozen desktop builds
+/build/
+/dist/
 
 # Upstream clones / toolchains (have their own remotes; re-clone as needed)
 third_party/

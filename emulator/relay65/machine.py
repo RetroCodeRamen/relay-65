@@ -82,11 +82,16 @@ class Machine:
     def step(self) -> None:
         if not self.running:
             return
+        self.step_micro()
+
+    def step_micro(self) -> None:
+        """Front-panel STEP: one EEPROM row (Φ0/Φ1/Φ2). Works while STOP."""
         before = self.cpu.microcycles
         self.cpu.step()
         self.clock.add_usteps(self.cpu.microcycles - before)
 
     def step_instruction(self) -> None:
+        """Front-panel STEP OP: run until the current 6502 instruction ends."""
         before = self.cpu.microcycles
         self.cpu.step_instruction()
         self.clock.add_usteps(self.cpu.microcycles - before)

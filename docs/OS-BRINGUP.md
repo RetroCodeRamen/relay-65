@@ -10,7 +10,7 @@ Your trees: `Source code/contiki-master` (also the `contiki` symlink),
 
 | Item | Value |
 | --- | --- |
-| CPU | Documented NMOS 6502, microcoded, one 8-bit ALU |
+| CPU | Documented NMOS 6502, microcoded, one 8-bit ALU; PC+1 and SP±1 are helpers, not that ALU |
 | RAM | `$0000–$BFFF` paged (`$C018–$C01B`), `$D000–$FDFF`; Contiki window `$C010` |
 | ROM | `$E000–$FFFF` **read** while `$C016` bit0=1. Writes always hit SRAM. FUZIX turns overlay off. |
 | Boot | `$C017` bit0 autoboot: monitor IDE-loads LBA 1 → SRAM, `STA $C016`, `JMP $4002` |
@@ -46,7 +46,9 @@ make -C software/contiki hello
 
 UART should contain `Hello, world` and `Contiki on Relay-65`.
 
-Live session (etimer heartbeat + line echo). Type in the GUI serial pane; Enter sends CR which the kernel maps to LF.
+Live session. Type in the GUI serial pane; Enter sends CR. The console is a
+C loop (`uart_read_line` → command or BASIC). It does **not** sit in Contiki
+`process_run` / `serial_line_process`. Tick IRQ is off (`TICK_CTRL = 0`).
 
 ```bash
 make -C software/contiki
@@ -61,6 +63,10 @@ UART is also copied to the terminal that launched `./relay65`. Wait for
 UART starts with the Clack motd, then a `_>` prompt (path prefix when you
 are not in `/`). Type `help` for commands, `man TOPIC` for manuals,
 `ls /bin` for programs.
+
+On the **20 ms/row** coil clock that is **1 min 55 s** to the prompt and
+**38 s** for the first `ls` (datasheet 10 ms/row: 57.7 s and 19.1 s). Details:
+[TIMING.md](TIMING.md). `--overclock` is how you use it on a PC.
 
 Clack (the shell):
 
@@ -77,9 +83,6 @@ Clack (the shell):
 - `basic` — enter Relay65 BASIC V1.0 (integer, Tiny BASIC subset).
   `BYE` returns to Clack. In BASIC: `PRINT`, `LET`, `RUN`, `LIST`, `NEW`,
   `FRE`. `PEEK`/`POKE` use decimal or `$` hex (`POKE $7000, $AA`).
-
-Clack is a C loop (UART → command or BASIC, then one BASIC statement per
-loop). It does not sit inside a Contiki protothread.
 
 ```bash
 make -C contiki/examples/hello-world \
@@ -121,8 +124,11 @@ waits. Neither is how FUZIX enters RAM.
 - ESP32 NIC at `$C200` (mailbox; TCP stays on the ESP32)
 - Physical SRAM 512 KiB, four page registers
 - 65C02 opcodes as extra microcode rows
-- Dedicated PC+1 as a microcode substitution
+- Variable-duration microcycles (FAST/LOGIC/ADD/MEMORY) after bench timing
 
 Not allowed: a second Python 6502 interpreter that OS code secretly runs on.
 Not allowed: host pokes that skip the monitor (PC=`$4002`, `$C016` clear, kernel
 `load_ram`). Imaging the CF card and the autoboot jumper are the real path.
+
+PC+1, ADDR_SP, and the 8-bit ±1 helper are already in the emulator control
+store. They are not a future OS-visible change.

@@ -1,11 +1,8 @@
-"""Altair-style front-panel lamps.
+"""Front-panel lamps.
 
-These are the same signals lamps would tap on the real backplane:
-A[15:0] from MAR, D[7:0] from the internal/system data bus, IR, and a
-few status bits from the control/status cards.
-
-On = '*'  Off = '.'   so you can read the machine with no GUI, like
-the row of lamps on an Altair 8800.
+Machine rows tap the backplane: MAR, last bus, IR, sequencer.
+6502 rows tap architectural registers (same bits the instruction set sees).
+The chassis has room for both; neither replaces the other.
 """
 
 from __future__ import annotations
@@ -31,6 +28,11 @@ class LampState:
     ir: int
     pc: int
     a: int
+    x: int
+    y: int
+    sp: int
+    p: int
+    ustep: int
     running: bool
     wait: bool
     irq: bool
@@ -45,16 +47,22 @@ class LampState:
         run = "*" if self.running and not self.wait else "."
         wait = "*" if self.wait or not self.running else "."
         return [
-            f"ADDR {bits(self.addr, 16)}  ${self.addr:04X}",
+            f"ADDR {bits(self.addr, 16)}  ${self.addr:04X}  MAR",
             f"DATA {bits(self.data, 8)}          ${self.data:02X}",
-            f"IR   {bits(self.ir, 8)}          ${self.ir:02X}  PC=${self.pc:04X} A=${self.a:02X}",
+            f"IR   {bits(self.ir, 8)}          ${self.ir:02X}  u={self.ustep} {self.phase}",
             (
                 f"STAT RUN{run} WAIT{wait}  I{'*' if self.flag_i else '.'} "
                 f"IRQ{'*' if self.irq else '.'}  "
                 f"N{'*' if self.flag_n else '.'} Z{'*' if self.flag_z else '.'} "
-                f"C{'*' if self.flag_c else '.'} V{'*' if self.flag_v else '.'}  "
-                f"{self.phase}"
+                f"C{'*' if self.flag_c else '.'} V{'*' if self.flag_v else '.'}"
             ),
+            f"PC   {bits(self.pc, 16)}  ${self.pc:04X}",
+            (
+                f"A    {bits(self.a, 8)}  ${self.a:02X}   "
+                f"X {bits(self.x, 8)}  ${self.x:02X}   "
+                f"Y {bits(self.y, 8)}  ${self.y:02X}"
+            ),
+            f"SP   {bits(self.sp, 8)}  ${self.sp:02X}   P {bits(self.p, 8)}  ${self.p:02X}",
         ]
 
     def text(self) -> str:
@@ -64,7 +72,7 @@ class LampState:
         """Single-line strip for --leds (stderr), leaves serial stdout alone."""
         return (
             f"A {bits(self.addr, 16)} D {bits(self.data, 8)} "
-            f"IR {bits(self.ir, 8)} "
+            f"IR {bits(self.ir, 8)} PC ${self.pc:04X} "
             f"{'RUN' if self.running and not self.wait else 'STOP'} "
             f"{self.phase}"
         )
@@ -79,6 +87,11 @@ def sample(machine) -> LampState:
         ir=cpu.addr.ir,
         pc=cpu.addr.pc,
         a=cpu.reg.a,
+        x=cpu.reg.x,
+        y=cpu.reg.y,
+        sp=cpu.reg.sp,
+        p=p,
+        ustep=cpu.ustep,
         running=machine.running,
         wait=cpu.halted,
         irq=machine.memory.timer.irq_line,

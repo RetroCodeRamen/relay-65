@@ -117,7 +117,7 @@ do_help(void)
 {
   uart_puts("Clack - ls cd pwd cat echo edit man help\n"
             "basic time peek poke io bank watch\n"
-            "clear uname free hd\n"
+            "clear uname abt free hd\n"
             "ls /bin - programs    man NAME - manual\n");
 }
 
@@ -148,6 +148,75 @@ static void
 do_uname(void)
 {
   uart_puts("Relay-65 Contiki Clack\n");
+}
+
+static const char *const abt_line[] = {
+  "Relay-65",
+  "Operating System: Contiki Version: 3.x",
+  "Shell: ClackShell Version: 1.0",
+  "",
+  "Written by AJ Jones",
+  "RetroCodeRamen",
+  "",
+  "Relay-65 is an electromechanical,",
+  "6502-compatible computer built around",
+  "a CPU made from physical relays.",
+  "",
+  "The goal is simple:",
+  "make a computer you can see working,",
+  "hear thinking, and understand.",
+  "",
+  "One bus. One ALU. Lots of relays."
+};
+
+#define ABT_N ((unsigned char)(sizeof(abt_line) / sizeof(abt_line[0])))
+
+static void
+abt_show(unsigned char i)
+{
+  uart_puts(abt_line[i]);
+  uart_putc('\n');
+}
+
+/* 0 = space (next line), 1 = enter. Other keys are ignored. */
+static unsigned char
+abt_wait_key(void)
+{
+  unsigned char c;
+  for(;;) {
+    c = uart_getc();
+    if(c == ' ') {
+      return 0;
+    }
+    if(c == '\r' || c == '\n') {
+      return 1;
+    }
+  }
+}
+
+static void
+do_abt(void)
+{
+  unsigned char i;
+
+  abt_show(0);
+  i = 1;
+  while(i < ABT_N) {
+    if(abt_wait_key()) {
+      while(i < ABT_N) {
+        abt_show(i);
+        i++;
+        if(i < ABT_N) {
+          uart_delay10();
+        }
+      }
+      break;
+    }
+    abt_show(i);
+    i++;
+  }
+  while(!abt_wait_key()) {
+  }
 }
 
 static void
@@ -308,6 +377,8 @@ run_line(char *line)
     do_clear();
   } else if(cmd_is(verb, "uname")) {
     do_uname();
+  } else if(cmd_is(verb, "abt")) {
+    do_abt();
   } else if(cmd_is(verb, "free")) {
     do_free();
   } else if(cmd_is(verb, "hd")) {

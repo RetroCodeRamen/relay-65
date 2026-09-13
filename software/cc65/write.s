@@ -6,6 +6,8 @@
         .export         _uart_puts
         .export         _uart_putn
         .export         _uart_read_line
+        .export         _uart_getc
+        .export         _uart_delay10
         .export         _vfs_ls_need
         .export         _uart_idle
         .import         popax, popptr1
@@ -63,8 +65,36 @@ lo:     dec     ptr2
 done:   rts
         .endproc
 
+; unsigned char __fastcall__ uart_getc(void);
+; Wait for RX. No echo.
+        .proc   _uart_getc
+wait:   lda     UART_STATUS
+        lsr     a
+        bcc     wait
+        lda     UART_DATA
+        ldx     #0
+        rts
+        .endproc
+
+; void uart_delay10(void);
+; About ten 6502 NOPs (one extra RTS).
+        .proc   _uart_delay10
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        nop
+        rts
+        .endproc
+
 ; void __fastcall__ uart_read_line(char *buf);
-; Echo STA $C000 immediately. Tight poll — no C idle while waiting for keys.
+; Tight poll — no C idle while waiting for keys.
+; BS ($08) and DEL ($7F) rub out the last character (BS, space, BS on TX).
         .proc   _uart_read_line
         sta     ptr1
         stx     ptr1+1
@@ -73,17 +103,35 @@ wait:   lda     UART_STATUS
         lsr     a
         bcc     wait
         lda     UART_DATA
-        sta     UART_DATA
+        cmp     #$08
+        beq     rub
+        cmp     #$7f
+        beq     rub
         cmp     #$0d
         beq     crlf
         cmp     #$0a
-        beq     endl
+        beq     lf
+        sta     UART_DATA
         sta     (ptr1),y
         iny
         cpy     #62
         bcc     wait
         bcs     endl
-crlf:   lda     #$0a
+rub:    cpy     #0
+        beq     wait
+        dey
+        lda     #$08
+        sta     UART_DATA
+        lda     #$20
+        sta     UART_DATA
+        lda     #$08
+        sta     UART_DATA
+        jmp     wait
+lf:     sta     UART_DATA
+        jmp     endl
+crlf:   lda     #$0d
+        sta     UART_DATA
+        lda     #$0a
         sta     UART_DATA
 endl:   lda     #0
         sta     (ptr1),y

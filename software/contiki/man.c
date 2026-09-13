@@ -29,7 +29,7 @@ man_list(void)
 {
   uart_puts("topics: clack help ls cd pwd cat echo edit man basic fs\n"
             "        time peek poke io bank watch\n"
-            "        clear uname free hd\n"
+            "        clear uname abt free hd\n"
             "man TOPIC\n");
 }
 
@@ -147,6 +147,13 @@ man_show(const char *topic)
   if(same(topic, "uname")) {
     uart_puts("UNAME\n"
               "  Machine, OS, and shell: Relay-65 Contiki Clack.\n");
+    return;
+  }
+  if(same(topic, "abt") || same(topic, "about")) {
+    uart_puts("ABT\n"
+              "  About Relay-65, Contiki, and ClackShell.\n"
+              "  Space - next line.  Enter - rest of the text.\n"
+              "  Enter again when it is done to leave.\n");
     return;
   }
   if(same(topic, "free")) {

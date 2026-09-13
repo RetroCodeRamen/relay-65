@@ -1,7 +1,7 @@
 """Relay-65 emulator.
 
   ./relay65 --gui --load software/cc65/hello.bin
-  # window: lamps + paddle switches on top, serial terminal below
+  # window: UART on top, MACHINE + 6502 lamp banks, paddles below
 """
 
 from __future__ import annotations
@@ -16,11 +16,20 @@ from .assemble import assemble
 from .leds import sample
 from .machine import Machine
 from .mmap import ROM_BASE
-from .panel import FrontPanel
 from .serialport import SerialPort
 
-ROOT = Path(__file__).resolve().parent.parent
+
+def resource_root() -> Path:
+    """emulator/ in a checkout; PyInstaller extract dir when frozen."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass)
+    return Path(__file__).resolve().parent.parent
+
+
+ROOT = resource_root()
 ROM_SOURCE = ROOT / "rom" / "monitor.s"
+CLACK_IMAGE = ROOT / "images" / "console.bin"
 
 
 def build_monitor():
@@ -31,7 +40,10 @@ def build_monitor():
 def pump_stdin(machine: Machine) -> None:
     if not sys.stdin.isatty():
         return
-    r, _, _ = select.select([sys.stdin], [], [], 0)
+    try:
+        r, _, _ = select.select([sys.stdin], [], [], 0)
+    except (OSError, ValueError):
+        return
     if not r:
         return
     data = sys.stdin.buffer.read1(256)
@@ -100,6 +112,8 @@ def run_serial(machine: Machine, args) -> int:
 
 
 def run_panel(machine: Machine, args) -> int:
+    from .panel import FrontPanel
+
     serial = SerialPort(args.serial_port)
     serial.attach_tx(machine)
     panel = FrontPanel(machine)
@@ -206,6 +220,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     p.add_argument("--phase-ms", type=float, default=None, help="override ms per Φ0/Φ1 coil change")
     args = p.parse_args(argv)
+    _apply_frozen_defaults(args)
 
     if args.assemble_only:
         img = assemble(args.assemble_only.read_text())
@@ -249,8 +264,30 @@ def main(argv: list[str] | None = None) -> int:
     if args.gui:
         return _run_gui(machine, burst=args.burst, start_running=args.run)
     if args.panel:
+        if sys.platform == "win32":
+            print("--panel needs a POSIX terminal; use --gui on Windows", file=sys.stderr)
+            return 2
         return run_panel(machine, args)
     return run_serial(machine, args)
+
+
+def _frozen() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def _apply_frozen_defaults(args) -> None:
+    """Double-click: front panel, warp clock, Clack already loaded."""
+    if not _frozen():
+        return
+    if not args.gui and not args.panel:
+        args.gui = True
+    if not args.run:
+        args.run = True
+    if not args.realtime and not args.minute:
+        args.overclock = True
+    if args.load is None and args.program is None and args.fuzix is None:
+        if CLACK_IMAGE.is_file():
+            args.load = CLACK_IMAGE
 
 
 def _run_gui(machine: Machine, burst: int, start_running: bool) -> int:

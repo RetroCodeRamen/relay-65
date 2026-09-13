@@ -19,95 +19,473 @@ HTML = r"""<!DOCTYPE html>
 <meta charset="utf-8">
 <title>Relay-65</title>
 <style>
-  :root { --bg:#1c1c1a; --metal:#2c2c28; --on:#ff3030; --off:#4a1212; --text:#e8e0d0; --dim:#8a8070; }
-  html,body { margin:0; background:var(--bg); color:var(--text); font-family: Helvetica, Arial, sans-serif; }
-  h1 { margin:12px 16px 4px; font-size:20px; letter-spacing:.12em; }
-  .sub { margin:0 16px 12px; color:var(--dim); font-size:13px; }
-  #termwrap { margin:8px 16px 4px; }
-  .panel { background:var(--metal); margin:8px 16px 16px; padding:14px 16px 10px; border-radius:6px; }
-  .row { display:flex; align-items:center; gap:6px; margin:8px 0; flex-wrap:wrap; }
-  .lab { width:48px; color:var(--dim); font: 12px ui-monospace, Courier, monospace; flex-shrink:0; }
-  .caption { color:var(--dim); font: 12px ui-monospace, Courier, monospace; margin:0 0 6px; width:auto; }
-  .lamp { width:14px; height:14px; border-radius:50%; background:var(--off); box-shadow: inset 0 1px 2px #000; }
-  .lamp.on { background:var(--on); box-shadow:0 0 8px #ff4040; }
-  .gap { width:10px; }
-  .sw { width:16px; height:28px; background:#3a3a36; border-radius:3px; cursor:pointer; border:1px solid #111; }
-  .sw.on { background:#ddd5c8; }
-  .hex { font: 14px ui-monospace, Courier, monospace; margin:8px 16px; }
-  .clocks { margin:4px 16px 10px; display:flex; gap:28px; flex-wrap:wrap; align-items:flex-end; }
-  .clk-lab { color:var(--dim); font: 11px ui-monospace, Courier, monospace; letter-spacing:.06em; }
-  .clk-val { font: 22px ui-monospace, Courier, monospace; color:var(--text); }
-  .clk-note { margin:0 16px 8px; color:var(--dim); font: 12px Helvetica, Arial, sans-serif; }
-  .btns { margin:10px 16px; display:flex; gap:8px; flex-wrap:wrap; }
-  button { background:#4a4840; color:var(--text); border:1px solid #222; padding:6px 12px; cursor:pointer; }
-  button:hover { background:#6a6458; }
-  .hexin { background:#2a2a26; color:var(--text); font: 14px ui-monospace, Courier, monospace; width:4.5em; border:1px solid #444; }
-  #term {
-    width:100%; height:280px; min-height:280px; box-sizing:border-box;
-    background:#0d0d0c; color:#9cff9c; font: 14px ui-monospace, Courier, monospace;
-    border:1px solid #333; padding:8px; white-space:pre-wrap; overflow:auto; outline:none;
-    cursor:text;
+  :root {
+    --bg: #0c1016;
+    --bg-2: #141c28;
+    --glass: linear-gradient(180deg, rgba(72,96,128,0.28) 0%, rgba(18,26,38,0.92) 38%, rgba(12,16,22,0.96) 100%);
+    --glass-cpu: linear-gradient(180deg, rgba(120,180,220,0.30) 0%, rgba(18,32,46,0.90) 42%, rgba(10,16,24,0.96) 100%);
+    --glass-machine: linear-gradient(180deg, rgba(120,90,70,0.26) 0%, rgba(26,22,26,0.93) 40%, rgba(12,12,14,0.97) 100%);
+    --edge: rgba(180,210,240,0.22);
+    --edge-in: rgba(255,255,255,0.14);
+    --text: #eef4fa;
+    --dim: #8aa0b8;
+    --cyan: #5ec8e8;
+    --cyan-dim: #3a88a8;
+    --orange: #f0a050;
+    --on: #ff2a28;
+    --off: #280808;
+    --term-fg: #c6e8c0;
+    --term-bg: #070b10;
   }
-  #term:focus { border-color:#6a8; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    color: var(--text);
+    font-family: "Segoe UI", "Trebuchet MS", Calibri, sans-serif;
+    background:
+      radial-gradient(1200px 480px at 50% -80px, rgba(80,160,220,0.22), transparent 70%),
+      radial-gradient(800px 400px at 100% 100%, rgba(240,120,40,0.06), transparent 55%),
+      linear-gradient(180deg, #152030 0%, var(--bg) 28%, #080a0e 100%);
+  }
+  .shell {
+    height: 100vh;
+    height: 100dvh;
+    max-width: 1480px;
+    margin: 0 auto;
+    padding: 6px 14px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overflow: hidden;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 10px;
+    flex: 0 0 auto;
+    min-width: 0;
+  }
+  .brand-mark {
+    width: 8px; height: 26px; border-radius: 2px; flex-shrink: 0;
+    background: linear-gradient(180deg, #9ae8ff, var(--cyan) 40%, #1a6080);
+    box-shadow: 0 0 12px rgba(94,200,232,0.55);
+  }
+  h1 {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: 0.22em;
+    color: #f6fbff;
+    text-shadow: 0 0 18px rgba(94,200,232,0.35);
+    flex-shrink: 0;
+  }
+  .sub {
+    margin: 0;
+    color: var(--dim);
+    font-size: 11px;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    min-width: 0;
+  }
+  #termwrap {
+    position: relative;
+    flex: 5 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 5px 8px 6px;
+    border-radius: 8px;
+    background: var(--glass);
+    border: 1px solid var(--edge);
+    box-shadow:
+      inset 0 1px 0 var(--edge-in),
+      0 8px 24px rgba(0,0,0,0.45);
+  }
+  .caption {
+    color: var(--cyan-dim);
+    font: 10px Consolas, "Cascadia Mono", ui-monospace, monospace;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin: 0 0 4px;
+    flex: 0 0 auto;
+  }
+  #term {
+    position: relative;
+    width: 100%;
+    flex: 1 1 auto;
+    height: auto;
+    min-height: 0;
+    background: var(--term-bg);
+    color: var(--term-fg);
+    font: 23px Consolas, "Cascadia Mono", ui-monospace, monospace;
+    border: 1px solid #0a1218;
+    border-radius: 4px;
+    padding: 6px 8px;
+    white-space: pre-wrap;
+    overflow: auto;
+    outline: none;
+    cursor: text;
+    box-shadow: inset 0 2px 10px rgba(0,0,0,0.65), inset 0 0 40px rgba(40,80,60,0.12);
+  }
+  #term:focus { border-color: rgba(94,200,232,0.45); }
+  #termwrap::after {
+    content: "";
+    pointer-events: none;
+    position: absolute;
+    left: 9px; right: 9px; top: 24px; bottom: 7px;
+    border-radius: 4px;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(255,255,255,0.018) 0px,
+      rgba(255,255,255,0.018) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+  }
+  .panels {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    flex: 6 1 0;
+    min-height: 0;
+    align-items: stretch;
+  }
+  .col { min-width: 0; display: flex; flex-direction: column; height: 100%; }
+  .sect {
+    margin: 0 2px 3px;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    color: #d8ecf8;
+    flex: 0 0 auto;
+  }
+  .sect-machine { color: #ecd8c8; }
+  .sect-cpu { color: #d0eefc; }
+  .clk-note {
+    margin: 0;
+    color: var(--dim);
+    font-size: 11px;
+    line-height: 1.25;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .panel {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 12px 17px 14px 0;
+    border-radius: 8px;
+    border: 1px solid var(--edge);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 7px;
+    box-shadow:
+      inset 0 1px 0 var(--edge-in),
+      0 10px 28px rgba(0,0,0,0.4);
+  }
+  .machine-panel {
+    background: var(--glass-machine);
+    box-shadow:
+      inset 0 1px 0 rgba(255,200,160,0.10),
+      inset 0 0 40px rgba(40,20,10,0.25),
+      0 10px 28px rgba(0,0,0,0.4);
+  }
+  .cpu-panel {
+    background: var(--glass-cpu);
+    box-shadow:
+      inset 0 1px 0 rgba(160,220,255,0.16),
+      inset 0 0 36px rgba(20,50,80,0.2),
+      0 10px 28px rgba(0,0,0,0.4);
+  }
+  .pair { display: flex; gap: 8px 27px; align-items: center; min-width: 0; }
+  .panel > .row, .panel > .pair { margin-left: -18px; }
+  .machine-panel #irLamps,
+  .machine-panel #statLamps { margin-left: -40px; }
+  .cpu-panel > .row, .cpu-panel > .pair { margin-left: -43px; }
+  .cpu-panel #xLamps,
+  .cpu-panel #spLamps { margin-left: -30px; }
+  .pair > .row { flex: 1 1 0; min-width: 0; }
+  .row { display: flex; align-items: center; gap: 7px; margin: 0; flex-wrap: nowrap; }
+  .lab {
+    width: 96px;
+    color: var(--dim);
+    font: 14px Consolas, "Cascadia Mono", ui-monospace, monospace;
+    letter-spacing: 0.04em;
+    flex-shrink: 0;
+    text-align: right;
+  }
+  .hexv {
+    font: 19px Consolas, "Cascadia Mono", ui-monospace, monospace;
+    color: #f4f8fc;
+    margin-left: 11px;
+    min-width: 3.4em;
+    text-shadow: 0 0 8px rgba(94,200,232,0.25);
+    flex-shrink: 0;
+  }
+  .bitlab {
+    font: 12px Consolas, "Cascadia Mono", ui-monospace, monospace;
+    color: #7a90a4;
+    letter-spacing: 0;
+  }
+  .lamp {
+    width: 22px; height: 22px;
+    margin: 0 auto;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #4a1818, var(--off) 68%);
+    border: 1px solid #1a0404;
+    box-shadow: inset 0 1px 2px rgba(255,180,180,0.12), inset 0 -2px 3px #000;
+    transition: background 80ms linear, box-shadow 80ms linear;
+    flex-shrink: 0;
+  }
+  .lamp.on {
+    background: radial-gradient(circle at 35% 30%, #ffb0a8, var(--on) 55%, #8a0000);
+    border-color: #ff6a60;
+    box-shadow: 0 0 6px 1px rgba(255,50,40,0.5), inset 0 1px 1px rgba(255,255,255,0.35);
+  }
+  .gap { width: 13px; flex-shrink: 0; }
+  .sw {
+    width: 20px; height: 32px;
+    border-radius: 3px;
+    cursor: pointer;
+    background: linear-gradient(180deg, #2a3340, #151a22);
+    border: 1px solid #0a0d12;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.12), 0 2px 2px rgba(0,0,0,0.4);
+    transition: background 80ms linear, box-shadow 80ms linear;
+    flex-shrink: 0;
+  }
+  .sw.on {
+    background: linear-gradient(180deg, #e8f2fa, #9ab8cc);
+    border-color: #7aa0b8;
+    box-shadow: 0 0 8px rgba(94,200,232,0.35), inset 0 1px 0 #fff;
+  }
+  .dock { flex: 0 0 auto; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .status-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    min-width: 0;
+  }
+  .status {
+    margin: 0;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: rgba(8,12,18,0.55);
+    border: 1px solid rgba(94,200,232,0.18);
+    font: 12px Consolas, "Cascadia Mono", ui-monospace, monospace;
+    color: var(--cyan);
+    letter-spacing: 0.04em;
+    flex: 1 1 auto;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .clocks {
+    margin: 0;
+    display: flex;
+    gap: 16px;
+    flex-wrap: nowrap;
+    align-items: flex-end;
+    flex-shrink: 0;
+  }
+  .clk-lab {
+    color: var(--dim);
+    font: 9px "Segoe UI", sans-serif;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+  .clk-val {
+    font: 15px Consolas, "Cascadia Mono", ui-monospace, monospace;
+    color: var(--text);
+    text-shadow: 0 0 12px rgba(94,200,232,0.2);
+  }
+  .ctrl-bar {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    gap: 5px;
+    align-items: stretch;
+    min-width: 0;
+  }
+  .ctrl-group {
+    padding: 6px 10px 7px;
+    border-radius: 8px;
+    background: var(--glass);
+    border: 1px solid var(--edge);
+    box-shadow: inset 0 1px 0 var(--edge-in);
+    width: 100%;
+  }
+  .ctrl-group.clock, .ctrl-group.memory { flex: 0 0 auto; min-width: 0; }
+  .ctrl-lab {
+    color: var(--orange);
+    font: 10px "Segoe UI", sans-serif;
+    letter-spacing: 0.16em;
+    margin-bottom: 4px;
+  }
+  .btns { display: flex; gap: 6px; flex-wrap: nowrap; }
+  .btns button { flex: 1 1 0; }
+  .mem-row { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
+  .mem-row button { flex: 1 1 0; }
+  .mem-lab { white-space: nowrap; flex-shrink: 0; }
+  button {
+    appearance: none;
+    font: 12px "Segoe UI", sans-serif;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: #f8fbff;
+    background: linear-gradient(180deg, #5a78a0 0%, #2c4058 48%, #1c2a3a 100%);
+    border: 1px solid #8ab0c8;
+    border-bottom-color: #0a1018;
+    border-radius: 4px;
+    padding: 6px 12px;
+    cursor: pointer;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 2px 4px rgba(0,0,0,0.4);
+    white-space: nowrap;
+  }
+  button:hover {
+    background: linear-gradient(180deg, #5a88a8 0%, #2a4860 50%, #1c3040 100%);
+    border-color: var(--cyan);
+  }
+  button:active {
+    transform: translateY(1px);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.45);
+  }
+  button:focus-visible { outline: 1px solid var(--cyan); outline-offset: 1px; }
+  .hexin {
+    background: linear-gradient(180deg, #0e141c, #1a2430);
+    color: #f4f8fc;
+    font: 14px Consolas, "Cascadia Mono", ui-monospace, monospace;
+    width: 4.4em;
+    border: 1px solid #3a5068;
+    border-radius: 4px;
+    padding: 5px 7px;
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.45);
+    flex-shrink: 0;
+  }
+  .hexin:focus { outline: none; border-color: var(--cyan); }
+  #statLamps > div { min-width: 34px; }
 </style>
 </head>
 <body>
-  <h1>RELAY-65</h1>
-  <p class="sub">Green box below is the UART. RUN starts, STOP pauses, STEP is one instruction, RESET rewinds to the program start without changing RUN/STOP. SPEED cycles RELAY (real coils) → 1s=1min (one PC second = one relay minute) → WARP (as fast as this PC).</p>
+<div class="shell">
+  <header class="brand">
+    <div class="brand-mark"></div>
+    <h1>RELAY-65</h1>
+    <p class="sub">UART $C000 · MACHINE = relay bus/sequencer · 6502 = A X Y SP P PC · STEP ROW = EEPROM word · STEP OP = instruction</p>
+  </header>
   <div id="termwrap">
-    <div class="caption">SERIAL UART $C000 — click this box and type (or type anywhere except ADDR/DATA). CLR TTY wipes this view.</div>
+    <div class="caption">Serial · UART $C000 · Return = CR · Backspace = $08 · Delete = $7F</div>
     <pre id="term" tabindex="0"></pre>
   </div>
-  <div class="panel">
-    <div class="row" id="addrLamps"><span class="lab">ADDR</span></div>
-    <div class="row" id="addrSw"><span class="lab">A SW</span></div>
-    <div class="row" id="dataLamps"><span class="lab">DATA</span></div>
-    <div class="row" id="dataSw"><span class="lab">D SW</span></div>
-    <div class="row" id="irLamps"><span class="lab">IR</span></div>
-    <div class="row" id="statLamps"><span class="lab">STAT</span></div>
+  <div class="dock">
+  <div class="ctrl-bar">
+    <div class="ctrl-group clock">
+      <div class="ctrl-lab">Clock</div>
+      <div class="btns">
+        <button data-cmd="run">RUN</button>
+        <button data-cmd="stop">STOP</button>
+        <button data-cmd="step_row">STEP ROW</button>
+        <button data-cmd="step_op">STEP OP</button>
+        <button data-cmd="reset">RESET</button>
+        <button data-cmd="speed" id="speedBtn">SPEED</button>
+      </div>
+    </div>
+    <div class="ctrl-group memory">
+      <div class="ctrl-lab">Memory</div>
+      <div class="mem-row">
+        <span class="mem-lab">ADDR $</span><input id="addrHex" class="hexin" maxlength="4" value="0000">
+        <span class="mem-lab">DATA $</span><input id="dataHex" class="hexin" maxlength="2" value="00" style="width:2.8em">
+        <button type="button" id="setSw">SET SW</button>
+        <button data-cmd="examine">EXAMINE</button>
+        <button data-cmd="examine_next">EX NEXT</button>
+        <button data-cmd="deposit">DEPOSIT</button>
+        <button data-cmd="deposit_next">DEP NEXT</button>
+        <button data-cmd="clr_tty">CLR TTY</button>
+      </div>
+    </div>
   </div>
-  <div class="hex" id="hex"></div>
-  <div class="clocks">
-    <div><div class="clk-lab">HOST (this PC, RUN on)</div><div class="clk-val" id="hostT">0.0s</div></div>
-    <div><div class="clk-lab">REAL (relays)</div><div class="clk-val" id="realT">0.0s</div></div>
-    <div><div class="clk-lab">WARP</div><div class="clk-val" id="warpT">—</div></div>
+  <div class="status-row">
+    <div class="status" id="hex"></div>
+    <div class="clocks">
+      <div><div class="clk-lab">HOST</div><div class="clk-val" id="hostT">0.0s</div></div>
+      <div><div class="clk-lab">REAL</div><div class="clk-val" id="realT">0.0s</div></div>
+      <div><div class="clk-lab">WARP</div><div class="clk-val" id="warpT">—</div></div>
+    </div>
   </div>
   <p class="clk-note" id="clockNote">HOST is wall time while RUN is on. REAL is those same microsteps at the relay clock (default 20 ms each) — how long the hardware would have to run to match warp.</p>
-  <div class="hex">
-    ADDR $<input id="addrHex" class="hexin" maxlength="4" value="0000">
-    DATA $<input id="dataHex" class="hexin" maxlength="2" value="00" style="width:2.5em">
-    <button type="button" id="setSw">SET SWITCHES</button>
   </div>
-  <div class="btns">
-    <button data-cmd="run">RUN</button>
-    <button data-cmd="stop">STOP</button>
-    <button data-cmd="step">STEP</button>
-    <button data-cmd="reset">RESET</button>
-    <button data-cmd="examine">EXAMINE</button>
-    <button data-cmd="examine_next">EX NEXT</button>
-    <button data-cmd="deposit">DEPOSIT</button>
-    <button data-cmd="deposit_next">DEP NEXT</button>
-    <button data-cmd="clr_tty">CLR TTY</button>
-    <button data-cmd="speed" id="speedBtn">SPEED</button>
+  <div class="panels">
+  <div class="col">
+  <div class="sect sect-machine" title="MAR is the address register. Fetch puts PC on A[15:0] when ADDR_PC is on. BUS is the last internal-bus byte.">MACHINE</div>
+  <div class="panel machine-panel">
+    <div class="row" id="addrLamps"><span class="lab">MAR</span></div>
+    <div class="row" id="addrSw"><span class="lab">ADDR SW</span></div>
+    <div class="pair">
+      <div class="row" id="dataLamps"><span class="lab">BUS</span></div>
+      <div class="row" id="irLamps"><span class="lab">IR</span></div>
+    </div>
+    <div class="pair">
+      <div class="row" id="dataSw"><span class="lab">DATA SW</span></div>
+      <div class="row" id="statLamps"><span class="lab">SEQ</span></div>
+    </div>
   </div>
+  </div>
+  <div class="col">
+  <div class="sect sect-cpu" title="Architectural registers. P bits left-to-right: N V U B D I Z C (B is not stored; U is forced 1).">6502</div>
+  <div class="panel cpu-panel">
+    <div class="row" id="pcLamps"><span class="lab">PC</span></div>
+    <div class="pair">
+      <div class="row" id="aLamps"><span class="lab">A</span></div>
+      <div class="row" id="xLamps"><span class="lab">X</span></div>
+    </div>
+    <div class="pair">
+      <div class="row" id="yLamps"><span class="lab">Y</span></div>
+      <div class="row" id="spLamps"><span class="lab">SP</span></div>
+    </div>
+    <div class="row" id="pLamps"><span class="lab">P</span></div>
+  </div>
+  </div>
+  </div>
+</div>
 <script>
-const addrL = mkLamps("addrLamps", 16);
-const dataL = mkLamps("dataLamps", 8);
-const irL = mkLamps("irLamps", 8);
-const statNames = ["RUN","WAIT","I","IRQ","N","Z","C","V"];
+const addrL = mkLamps("addrLamps", 16, true);
+const dataL = mkLamps("dataLamps", 8, true);
+const irL = mkLamps("irLamps", 8, true);
+const pcL = mkLamps("pcLamps", 16, true);
+const aL = mkLamps("aLamps", 8, true);
+const xL = mkLamps("xLamps", 8, true);
+const yL = mkLamps("yLamps", 8, true);
+const spL = mkLamps("spLamps", 8, true);
+const pL = mkLamps("pLamps", 8, false, ["N","V","U","B","D","I","Z","C"]);
+const statNames = ["RUN","WAIT","IRQ"];
 const statL = mkNamed("statLamps", statNames);
 const addrS = mkSw("addrSw", 16);
 const dataS = mkSw("dataSw", 8);
 let serial = "";
 let termSeq = 0;
 
-function mkLamps(id, n) {
+function mkLamps(id, n, nums, names) {
   const row = document.getElementById(id);
   const els = [];
   for (let i = 0; i < n; i++) {
     if (i && i % 8 === 0) { const g = document.createElement("div"); g.className="gap"; row.appendChild(g); }
-    const d = document.createElement("div"); d.className = "lamp"; row.appendChild(d); els.push(d);
+    const wrap = document.createElement("div");
+    wrap.style.textAlign = "center";
+    if (names || nums) {
+      const lab = document.createElement("div");
+      lab.className = "bitlab";
+      lab.textContent = names ? names[i] : String(n-1-i);
+      wrap.appendChild(lab);
+    }
+    const d = document.createElement("div"); d.className = "lamp"; wrap.appendChild(d);
+    row.appendChild(wrap); els.push(d);
   }
+  const hx = document.createElement("span"); hx.className = "hexv"; hx.id = id + "Hex"; hx.textContent = "$00";
+  row.appendChild(hx);
   return els;
 }
 function mkNamed(id, names) {
@@ -115,7 +493,7 @@ function mkNamed(id, names) {
   const els = {};
   names.forEach(n => {
     const wrap = document.createElement("div"); wrap.style.textAlign="center";
-    const lab = document.createElement("div"); lab.textContent=n; lab.style.font="10px Courier"; lab.style.color="#8a8070";
+    const lab = document.createElement("div"); lab.className="bitlab"; lab.textContent=n;
     const d = document.createElement("div"); d.className="lamp"; wrap.appendChild(lab); wrap.appendChild(d);
     row.appendChild(wrap); els[n]=d;
   });
@@ -129,9 +507,8 @@ function mkSw(id, n) {
     const wrap = document.createElement("div");
     wrap.style.textAlign = "center";
     const lab = document.createElement("div");
+    lab.className = "bitlab";
     lab.textContent = String(n - 1 - i);
-    lab.style.font = "9px Courier";
-    lab.style.color = "#8a8070";
     const d = document.createElement("div"); d.className = "sw";
     d.onclick = () => { d.classList.toggle("on"); syncHexFromSw(); };
     wrap.appendChild(lab); wrap.appendChild(d);
@@ -192,6 +569,7 @@ function sendKey(e) {
   let s = null;
   if (e.key === "Enter") s = "\r";
   else if (e.key === "Backspace") s = "\b";
+  else if (e.key === "Delete") s = "\x7f";
   else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) s = e.key;
   if (!s) return;
   e.preventDefault();
@@ -207,9 +585,25 @@ async function poll() {
     setLamps(addrL, s.addr);
     setLamps(dataL, s.data);
     setLamps(irL, s.ir);
+    setLamps(pcL, s.pc);
+    setLamps(aL, s.a);
+    setLamps(xL, s.x);
+    setLamps(yL, s.y);
+    setLamps(spL, s.sp);
+    setLamps(pL, s.p);
+    const hx = (id, v, w) => { const el = document.getElementById(id); if (el) el.textContent = "$" + v.toString(16).toUpperCase().padStart(w,"0"); };
+    hx("addrLampsHex", s.addr, 4);
+    hx("dataLampsHex", s.data, 2);
+    hx("irLampsHex", s.ir, 2);
+    hx("pcLampsHex", s.pc, 4);
+    hx("aLampsHex", s.a, 2);
+    hx("xLampsHex", s.x, 2);
+    hx("yLampsHex", s.y, 2);
+    hx("spLampsHex", s.sp, 2);
+    hx("pLampsHex", s.p, 2);
     statNames.forEach(n => statL[n].classList.toggle("on", !!s.stat[n]));
     document.getElementById("hex").textContent =
-      `ADDR $${s.addr.toString(16).padStart(4,"0")}  DATA $${s.data.toString(16).padStart(2,"0")}  IR $${s.ir.toString(16).padStart(2,"0")}  PC $${s.pc.toString(16).padStart(4,"0")}  A $${s.a.toString(16).padStart(2,"0")}  ${s.phase}  ${s.halted ? "HALTED" : (s.running && !s.wait ? "RUN" : "STOP")}  ${s.clock}`;
+      `${s.phase}  u=${s.ustep}  ${s.halted ? "HALTED" : (s.running && !s.wait ? "RUN" : "STOP")}  ${s.clock}`;
     if (s.host) document.getElementById("hostT").textContent = s.host;
     if (s.real) document.getElementById("realT").textContent = s.real;
     if (s.warp) document.getElementById("warpT").textContent = s.warp;
@@ -221,7 +615,13 @@ async function poll() {
       term.textContent = "";
     }
     if (s.serial && s.serial.length) {
-      serial += s.serial;
+      for (const ch of s.serial) {
+        if (ch === "\b" || ch === "\x7f") {
+          if (serial.length) serial = serial.slice(0, -1);
+        } else {
+          serial += ch;
+        }
+      }
       term.textContent = serial.replace(/\r/g,"\n");
       term.scrollTop = term.scrollHeight;
     }
@@ -245,9 +645,11 @@ class _State:
         self._alive = True
 
         def tx(ch: int) -> None:
-            self.serial.append(ch)
+            ch &= 0xFF
+            if ch in (8, 10, 13, 127) or 32 <= ch < 127:
+                self.serial.append(ch)
             try:
-                sys.stdout.buffer.write(bytes([ch & 0xFF]))
+                sys.stdout.buffer.write(bytes([ch]))
                 sys.stdout.buffer.flush()
             except BrokenPipeError:
                 pass
@@ -329,6 +731,11 @@ def run_web(machine, burst: int = 800, start_running: bool = False, host: str = 
                         "ir": s.ir,
                         "pc": s.pc,
                         "a": s.a,
+                        "x": s.x,
+                        "y": s.y,
+                        "sp": s.sp,
+                        "p": s.p,
+                        "ustep": s.ustep,
                         "phase": s.phase,
                         "clock": st.machine.clock.label(),
                         "host": rt["host"],
@@ -341,12 +748,7 @@ def run_web(machine, burst: int = 800, start_running: bool = False, host: str = 
                         "stat": {
                             "RUN": s.running and not s.wait,
                             "WAIT": s.wait or not s.running,
-                            "I": s.flag_i,
                             "IRQ": s.irq,
-                            "N": s.flag_n,
-                            "Z": s.flag_z,
-                            "C": s.flag_c,
-                            "V": s.flag_v,
                         },
                         "serial": out.decode("ascii", errors="replace"),
                         "term_seq": st.term_seq,
@@ -400,9 +802,12 @@ def _do_cmd(st, body: dict) -> dict:
         machine.running = False
     elif cmd in ("speed", "overclock"):
         machine.clock.cycle_speed()
-    elif cmd == "step":
+    elif cmd in ("step_row", "step"):
         machine.running = False
-        machine.cpu.step_instruction()
+        machine.step_micro()
+    elif cmd == "step_op":
+        machine.running = False
+        machine.step_instruction()
     elif cmd == "reset":
         machine.restart_loaded()
     elif cmd == "clr_tty":

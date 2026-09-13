@@ -289,11 +289,27 @@ class LampTests(unittest.TestCase):
         m.cpu.addr.marh = 0xC0
         m.cpu.last_bus = 0x5A
         m.cpu.addr.ir = 0xA9
+        m.cpu.reg.a = 0x11
+        m.cpu.reg.x = 0x22
+        m.cpu.reg.y = 0x33
+        m.cpu.reg.sp = 0xFD
         text = sample(m).text()
         self.assertIn("ADDR", text)
+        self.assertIn("MAR", text)
         self.assertIn("$C000", text)
         self.assertIn("$5A", text)
         self.assertIn("Φ", text)
+        self.assertIn("PC", text)
+        self.assertIn("$11", text)
+        self.assertIn("$22", text)
+        self.assertIn("$33", text)
+        self.assertIn("$FD", text)
+        s = sample(m)
+        self.assertEqual(s.a, 0x11)
+        self.assertEqual(s.x, 0x22)
+        self.assertEqual(s.y, 0x33)
+        self.assertEqual(s.sp, 0xFD)
+
     def test_c_printf_on_uart(self):
         path = ROOT.parent / "software" / "cc65" / "hello.bin"
         if not path.exists():
@@ -495,7 +511,9 @@ class ContikiTests(unittest.TestCase):
         self.assertIn(b"Contiki on Relay-65", tx)
 
     def _boot_console(self) -> Machine:
-        path = ROOT.parent / "software" / "contiki" / "console.bin"
+        path = ROOT.parent / "software" / "images" / "console.bin"
+        if not path.exists():
+            path = ROOT.parent / "software" / "contiki" / "console.bin"
         if not path.exists():
             self.skipTest("make -C software/contiki")
         rom = assemble((ROOT / "rom" / "monitor.s").read_text(), default_origin=ROM_BASE)
@@ -513,6 +531,38 @@ class ContikiTests(unittest.TestCase):
         self.assertIn(b"Clack", bytes(m.uart.tx_log))
         self.assertIn(b"_> ", bytes(m.uart.tx_log))
         return m
+
+    def test_clack_relay_boot_and_ls_times(self):
+        """Lock measured coil times. Update docs/TIMING.md if these counts move."""
+        from relay65.timing import format_duration, microstep_period_s
+
+        m = self._boot_console()
+        self.assertEqual(bytes(m.uart.tx_log), b"Clack on Relay-65\n_> ")
+        self.assertEqual(m.cpu.microcycles, 5771)
+        self.assertEqual(m.cpu.instructions, 1031)
+        period = microstep_period_s()
+        self.assertEqual(format_duration(5771 * period), "1m 55s")
+
+        start = m.cpu.microcycles
+        start_tx = len(m.uart.tx_log)
+        m.uart.push_rx(b"ls\n")
+        first = None
+        extra = b""
+        for _ in range(500_000):
+            m.step()
+            extra = bytes(m.uart.tx_log[start_tx:])
+            if first is None and b"/" in extra:
+                first = m.cpu.microcycles - start
+            if extra.endswith(b"_> ") and first is not None and len(m.uart.rx) == 0:
+                break
+        self.assertEqual(first, 819)
+        self.assertEqual(m.cpu.microcycles - start, 1906)
+        self.assertIn(b"/bin/", extra)
+        self.assertIn(b"/etc/", extra)
+        self.assertIn(b"/www/", extra)
+        self.assertIn(b"/tmp/", extra)
+        self.assertTrue(extra.endswith(b"_> "))
+        self.assertEqual(format_duration(1906 * period), "38.1s")
 
     @staticmethod
     def _send_line(
@@ -557,6 +607,16 @@ class ContikiTests(unittest.TestCase):
         self.assertIn(b"7", tx)
         self.assertIn(b"ok", tx)
 
+    def test_basic_backspace_and_delete(self):
+        m = self._boot_console()
+        self._send_line(m, b"basic\n", b"READY")
+        tx = self._send_line(m, b"PRINT 9\x083\n", b"3\n")
+        self.assertIn(b"3\n", tx)
+        tx = self._send_line(m, b"PRINT 12\x7f\x7f7\n", b"7\n")
+        self.assertIn(b"7\n", tx)
+        tx = self._send_line(m, b"\x08\x08PRINT 1+2\n", b"3\n")
+        self.assertIn(b"3\n", tx)
+
     def test_console_ls_man_edit(self):
         m = self._boot_console()
         tx = self._send_line(m, b"ls\n", b"www", wait_prompt=True)
@@ -573,6 +633,58 @@ class ContikiTests(unittest.TestCase):
         self._send_line(m, b".\n", b"saved", wait_prompt=True)
         tx = self._send_line(m, b"cat /tmp/notes\n", b"hello from ed", wait_prompt=True)
         self.assertIn(b"hello from ed", tx)
+
+    def test_console_abt(self):
+        m = self._boot_console()
+        tx = self._send_line(m, b"help\n", b"uname abt", wait_prompt=True)
+        self.assertIn(b"uname abt", tx)
+
+        start = len(m.uart.tx_log)
+        m.uart.push_rx(b"abt\n")
+        extra = b""
+        for _ in range(500_000):
+            m.step()
+            extra = bytes(m.uart.tx_log[start:])
+            if extra.endswith(b"Relay-65\n") and len(m.uart.rx) == 0:
+                break
+        self.assertTrue(extra.endswith(b"Relay-65\n"), extra)
+        self.assertNotIn(b"Contiki Version", extra)
+        self.assertFalse(extra.endswith(b"_> "))
+
+        start = len(m.uart.tx_log)
+        m.uart.push_rx(b" ")
+        extra = b""
+        for _ in range(200_000):
+            m.step()
+            extra = bytes(m.uart.tx_log[start:])
+            if extra.endswith(b"Operating System: Contiki Version: 3.x\n"):
+                break
+        self.assertEqual(extra, b"Operating System: Contiki Version: 3.x\n")
+
+        start = len(m.uart.tx_log)
+        m.uart.push_rx(b"\n")
+        extra = b""
+        for _ in range(500_000):
+            m.step()
+            extra = bytes(m.uart.tx_log[start:])
+            if b"Lots of relays.\n" in extra and len(m.uart.rx) == 0:
+                break
+        self.assertIn(b"Shell: ClackShell Version: 1.0\n", extra)
+        self.assertIn(b"Written by AJ Jones\n", extra)
+        self.assertIn(b"RetroCodeRamen\n", extra)
+        self.assertIn(b"One bus. One ALU. Lots of relays.\n", extra)
+        self.assertTrue(extra.endswith(b"Lots of relays.\n"), extra)
+        self.assertNotIn(b"_> ", extra)
+
+        start = len(m.uart.tx_log)
+        m.uart.push_rx(b"\n")
+        extra = b""
+        for _ in range(200_000):
+            m.step()
+            extra = bytes(m.uart.tx_log[start:])
+            if extra.endswith(b"_> ") and len(m.uart.rx) == 0:
+                break
+        self.assertTrue(extra.endswith(b"_> "), extra)
 
 
 class ControlStoreTests(unittest.TestCase):
@@ -765,6 +877,20 @@ class FuzixBootTests(unittest.TestCase):
         tx = bytes(m.uart.tx_log)
         self.assertIn(b"FUZIX version", tx)
         self.assertFalse(m.cpu.halted)
+
+
+class ResourceTests(unittest.TestCase):
+    def test_monitor_rom_is_next_to_the_package(self):
+        from relay65.__main__ import ROM_SOURCE, resource_root
+
+        self.assertEqual(resource_root(), ROOT)
+        self.assertTrue(ROM_SOURCE.is_file())
+        self.assertIn("monitor.s", ROM_SOURCE.name)
+
+    def test_shipped_clack_image_exists(self):
+        path = ROOT.parent / "software" / "images" / "console.bin"
+        self.assertTrue(path.is_file(), "software/images/console.bin is the downloadable Clack image")
+        self.assertGreater(path.stat().st_size, 1024)
 
 
 if __name__ == "__main__":

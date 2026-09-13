@@ -27,6 +27,8 @@ console.relay65: console.co $(PROJECT_OBJECTFILES) $(OBJECTDIR)/ls.o \
 
 bin: $(CONTIKI_PROJECT)
 	cp -f console.relay65 console.bin
+	mkdir -p $(ROOT)/software/images
+	cp -f console.bin $(ROOT)/software/images/console.bin
 
 .PHONY: bin
 

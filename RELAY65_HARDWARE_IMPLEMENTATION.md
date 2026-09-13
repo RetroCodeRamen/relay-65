@@ -1,6 +1,19 @@
 # Relay-65 hardware implementation (architecture review)
 
-**Status:** review only. This document does not change the emulator, firmware, binaries, or the software-visible 6502 contract. Proposed physical optimizations are **microarchitecture and microcode timing**, not a new ISA.
+**Status (12 Sep 2026):** this file is the **design history and relay budget**,
+not the live control-store contract. The emulator has already been retargeted
+to Design B fetch (ADDR_PC + PC+1 in one EEPROM row), packed EA/END/ALU
+writeback, ADDR_SP, an 8-bit ±1 helper, and taken-branch ALU muxes. Live
+contract: [`docs/RELAY-CPU.md`](docs/RELAY-CPU.md). Measured Clack times:
+[`docs/TIMING.md`](docs/TIMING.md).
+
+Early sections still describe the **then-current** 12-row FETCH / ALU PC+1
+machine. That snapshot is kept so the Option A/B/C arithmetic stays
+auditable. Do not copy those row counts into new boards.
+
+**This document does not change firmware, binaries, or the software-visible
+6502 contract.** Physical optimizations remain microarchitecture and
+microcode timing, not a new ISA.
 
 **Behavioral reference:** the Python emulator under `emulator/relay65/`. Contiki, BASIC, and the monitor already run on it. The physical machine must reproduce that software-visible behavior, not a MOS 6502 die, and not a new ISA.
 
@@ -16,11 +29,17 @@
 
 ## How to read this document
 
-The emulator is already a **horizontal microcoded 8-bit datapath**: one shared bus, one ALU, registers as OE/LOAD slices, memory only via MAR. Opcode “decoding” is EEPROM lookup of `{IR, uStep}`. That *is* the CPU. A gate-level 6502 clone would be a different machine.
+The emulator is already a **horizontal microcoded 8-bit datapath**: one shared bus, one ALU, registers as OE/LOAD slices, memory via the address mux (PC / `$0100|SP` / MAR). Opcode “decoding” is EEPROM lookup of `{IR, uStep}`. That *is* the CPU. A gate-level 6502 clone would be a different machine.
 
 Silicon is allowed for SRAM/ROM, microcode EEPROM, decode, coil drivers, clocks, UART, CF, ESP32, and similar support (`DESIGN.md` §3). Relays must perform architectural storage, the ALU, **and** the routing that moves bytes between those units.
 
-Steps 1–3, 9, 11–12, and 16 reverse-engineer the **current emulator** (still the behavioral reference). Steps 4–8, 10, and 13–15 recorded the **OLD DESIGN** (~220 relays, silicon bus OE, PC through the ALU). Those sections are kept. The **NEW DESIGN** is specified in [Performance-Optimized Physical Architecture](#performance-optimized-physical-architecture).
+Steps 1–3, 9, 11–12, and 16 reverse-engineer the **emulator as it was when
+this review was written** (12-row FETCH, PC+1 through the ALU). That snapshot
+is still the behavioral *style* (one bus, one ALU, EEPROM rows) but **not**
+today’s row counts. Steps 4–8, 10, and 13–15 recorded the **OLD DESIGN**
+(~220 relays, silicon bus OE, PC through the ALU). Those sections are kept.
+The **NEW DESIGN** is specified in [Performance-Optimized Physical Architecture](#performance-optimized-physical-architecture).
+The live control store is `emulator/relay65/isa.py` and [docs/RELAY-CPU.md](docs/RELAY-CPU.md).
 
 ---
 
