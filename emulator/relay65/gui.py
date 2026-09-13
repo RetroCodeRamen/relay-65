@@ -135,8 +135,8 @@ class RelayGui:
         self.root = tk.Tk()
         self.root.title("Relay-65")
         self.root.configure(bg=BG)
-        self.root.minsize(1100, 640)
-        self.root.geometry("1280x720")
+        self.root.minsize(1100, 720)
+        self.root.geometry("1280x800")
 
         self._build_header()
         self._build_terminal()
@@ -221,8 +221,8 @@ class RelayGui:
         ).pack(side=tk.LEFT)
 
     def _build_terminal(self) -> None:
-        wrap = tk.Frame(self.root, bg=GLASS, padx=8, pady=6, highlightbackground=EDGE, highlightthickness=1)
-        wrap.pack(fill=tk.BOTH, expand=True, padx=12, pady=(6, 0))
+        wrap = tk.Frame(self.root, bg=GLASS, padx=8, pady=4, highlightbackground=EDGE, highlightthickness=1)
+        wrap.pack(fill=tk.X, expand=False, padx=12, pady=(6, 0))
         tk.Label(
             wrap,
             text="SERIAL · UART $C000 · RETURN = CR · BACKSPACE = $08 · DELETE = $7F",
@@ -230,7 +230,7 @@ class RelayGui:
             bg=GLASS,
             font=(MONO, 8),
         ).pack(anchor="w")
-        self.term_font = tkfont.Font(family=MONO, size=21)
+        self.term_font = tkfont.Font(family=MONO, size=16)
         self.term = tk.Text(
             wrap,
             bg="#070b10",
@@ -238,15 +238,15 @@ class RelayGui:
             insertbackground="#5ec8e8",
             font=self.term_font,
             wrap=tk.CHAR,
-            height=10,
+            height=6,
             undo=False,
             highlightbackground="#0a1218",
             highlightthickness=1,
             relief=tk.FLAT,
             padx=8,
-            pady=6,
+            pady=4,
         )
-        self.term.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
+        self.term.pack(fill=tk.X, expand=False, pady=(4, 0))
         self.term.bind("<Key>", self._on_key)
         self.term.bind("<Button-1>", lambda e: self.term.focus_set())
         self.term.focus_set()
