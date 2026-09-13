@@ -2,7 +2,7 @@
 
 **Luggable Computer — Design Plan & Philosophy**
 
-*Working Draft v0.1 · September 6, 2026*
+*Hardware contract v0.1 · Software release [v1.0.0](https://github.com/RetroCodeRamen/relay-65/releases/tag/v1.0.0) · September 2026*
 
 Primary software goals: bare-metal monitor → Contiki (no IP stack) → FUZIX.
 TCP/Wi-Fi lives on the ESP32 card, not on the 6502.

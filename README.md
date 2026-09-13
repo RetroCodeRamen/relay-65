@@ -2,7 +2,7 @@
 
 A **luggable electromechanical 6502**: software-visible NMOS 6502 because a **relay datapath** executes it. Semiconductors are allowed for SRAM/ROM, microcode EEPROM, coil drivers, clocks, UART, CompactFlash, and an ESP32 network card. A hidden MCU that interprets opcodes is not the machine.
 
-The Python emulator under `emulator/` is the **behavioral reference**. Contiki (with integer BASIC), the monitor ROM, and a FUZIX kernel port already run on it. Physical hardware is designed, not built.
+The Python emulator under `emulator/` is the **behavioral reference**. Contiki 3.x (with integer BASIC and the **Clack** shell 1.0), the monitor ROM, and a FUZIX kernel port already run on it. Physical hardware is designed, not built. First public software release: **[v1.0.0](https://github.com/RetroCodeRamen/relay-65/releases/tag/v1.0.0)**.
 
 ## Status
 
@@ -10,7 +10,7 @@ The Python emulator under `emulator/` is the **behavioral reference**. Contiki (
 | --- | --- |
 | ISA / binaries | Official NMOS 6502; illegal opcodes jam. cc65 `--cpu 6502` only (no 65C02). |
 | Emulator | Microcoded 8-bit bus, one ALU, packed EEPROM control words. Design B fetch is ADDR_PC + hardware PC+1 in **one** µstep per opcode/operand byte. Stack uses ADDR_SP; INX/Y/SP use an 8-bit +1/−1 helper. Indexed EA still uses the ALU. |
-| Software | Monitor at `$E000`. Contiki console + BASIC. FUZIX kernel bring-up (CF boot, not a finished Unix box). TCP stays on the ESP32 mailbox, not uIP on the 6502. |
+| Software | **v1.0.0.** Monitor at `$E000`. Contiki 3.x + ClackShell 1.0 + BASIC. FUZIX kernel bring-up (CF boot, not a finished Unix box). TCP stays on the ESP32 mailbox, not uIP on the 6502. |
 | Hardware v1 | **Design B** is in the emulator: ADDR_PC, hardware PC+1, ADDR_SP, 8-bit ±1, packed fetch. Physical boards are not built. Envelope **~450 DPDT** (populated a bit above the old 315–360 once stack/INX helpers are counted). |
 
 ## Design rules
@@ -24,14 +24,29 @@ Philosophy and card-cage intent: [DESIGN.md](DESIGN.md). Frozen emulator/hardwar
 
 ## Quick start
 
-Python 3. No extra packages for the core emulator. `--gui` uses tkinter (same
-front panel as the browser UI), or a browser panel at `http://127.0.0.1:8065`
-if tkinter is missing.
+### Download (Windows / Linux)
 
-**Download (Windows / Linux):** GitHub Actions builds `Relay-65.exe` and
-`Relay-65`. Double-click: Clack loads, warp clock, RUN. Type in the serial
-pane. Rebuild those binaries with `pyinstaller pack/relay65.spec` (needs
-`software/images/console.bin`).
+**[v1.0.0 release](https://github.com/RetroCodeRamen/relay-65/releases/tag/v1.0.0)** — no Python, no compiler.
+
+| File | What |
+| --- | --- |
+| `Relay-65-windows.exe` | Windows desktop app |
+| `Relay-65-linux` | Linux desktop app (`chmod +x` if needed) |
+
+Double-click. Clack is already loaded, the clock is warp, RUN is on. Type in the **serial** pane (green text). Wait for:
+
+```
+Clack on Relay-65
+_>
+```
+
+Then `help`, `ls`, `abt`, `basic`. `man abt` is the about-screen keys. SPEED on the panel cycles RELAY (real coil waits) → 1s=1min → WARP.
+
+If tkinter is missing, the same front panel opens in a browser at `http://127.0.0.1:8065`. Rebuild the apps with `pyinstaller pack/relay65.spec` ([pack/README.md](pack/README.md)).
+
+### From a git checkout
+
+Python **3.9+**. No pip packages for the emulator. `--gui` is a native window (tkinter) with the same layout as the browser panel.
 
 ```bash
 # tests
@@ -40,33 +55,33 @@ cd emulator && python3 -m unittest discover -s tests -v
 # from repo root — monitor ROM, UART on stdin/stdout
 ./relay65 --overclock --max 20000
 
-# front panel (lamps + serial). START is STOP unless --run
+# Clack (same image the download uses). START is STOP unless --run
 ./relay65 --gui --overclock --run --load software/images/console.bin
 ```
 
-Windows (from a checkout, Python from python.org):
+Windows (Python from python.org, which includes tkinter):
 
 ```text
 py -3 relay65 --gui --overclock --run --load software/images/console.bin
 ```
 
-`--overclock` skips millisecond coil waits (needed to use Contiki/BASIC on a PC). Default timing is ~20 ms per microstep. `--minute` (or SPEED on the panel) runs 60×: one PC second = one minute of relay time.
+`--panel` is a POSIX text front panel (not Windows). `--overclock` skips millisecond coil waits so Clack is usable on a PC. Default timing is ~20 ms per microstep. `--minute` (or SPEED) is 60×: one PC second = one minute of relay time.
 
-Panel: `R` run, `S` stop, space step, `I` reset, `A`+hex examine address, `D`+hex data, `E` examine, `P` deposit. Serial is the Teletype (`$C000`); lamps are the front panel.
+Panel keys: `R` run, `S` stop, space = STEP ROW, `K` = STEP OP, `I` reset, `A`+hex examine, `D`+hex data, `E` examine, `P` deposit. Serial is the Teletype (`$C000`). Lamps are MACHINE (relay bus) and 6502 (A X Y SP P PC). HOST / REAL / WARP are wall time vs coil time.
 
 ## Repository layout
 
 | Path | What |
 | --- | --- |
 | `./relay65` | Run the emulator from the repo root |
-| `pack/` | PyInstaller spec for Windows/Linux desktop binaries |
-| `software/images/` | Shipped Clack image (`console.bin`) for downloads |
+| `pack/` | PyInstaller spec; see [pack/README.md](pack/README.md) |
+| `software/images/` | Shipped Clack image (`console.bin`) for v1.0.0 downloads |
 | `emulator/` | CPU, ALU, memory, UART, CF, ESP32 mailbox, panel/GUI |
 | `emulator/rom/monitor.s` | Front-panel monitor (assembled at run time) |
 | `software/cc65/` | Bare-metal crt0, UART write, `relay65.cfg` |
 | `software/contiki/` | Console + BASIC; builds against the `contiki` tree |
 | `software/fuzix/` | CF pack helper; kernel is `fuzix/Kernel/platform/platform-relay65/` |
-| `docs/` | CPU contract, OS bring-up |
+| `docs/` | CPU contract, OS bring-up, coil times |
 | `RELAY65_HARDWARE_IMPLEMENTATION.md` | Reverse-engineered emulator + physical Design A/B/C |
 | `video-assets/` | Intro script and related media notes |
 | `contiki`, `fuzix` | Symlinks to local upstream checkouts (`Source code/…`, gitignored) |
@@ -106,7 +121,9 @@ C programs load at `$0200`. IRQ/NMI ROM vectors `JMP ($00F0)` / `JMP ($00F2)`. D
 
 **Monitor** — dump/deposit/go, `f` CF boot. RESET always hits ROM; `--fuzix` inserts CF + jumper, it does not poke PC.
 
-**Contiki** — no IPv6/uIP on the 6502. Daily OS. The shell is **Clack** (`help`, `ls`, `man`, `edit`, `basic`). Type in the GUI serial pane. On the 20 ms coil clock, boot to `_>` is **1 min 55 s**; first `ls` is **38 s**. See [docs/TIMING.md](docs/TIMING.md).
+**Contiki 3.x** — no IPv6/uIP on the 6502. Daily OS. The shell is **ClackShell 1.0** (`help`, `ls`, `man`, `edit`, `basic`, `abt`, `uname`). Type in the GUI serial pane. On the 20 ms coil clock, boot to `_>` is **1 min 55 s**; first `ls` is **38 s**. See [docs/TIMING.md](docs/TIMING.md).
+
+**`abt`** — about text, one line at a time. Space = next line. Enter = the rest (~10 6502 `NOP`s between lines). Enter again when it is done to return to `_>`.
 
 **BASIC** — integer Tiny BASIC subset started from Clack (`PRINT`, `LET`, `RUN`, `PEEK`/`POKE`, `BYE`).
 
@@ -148,7 +165,8 @@ is still a microcode substitution software cannot see.
 | --- | --- |
 | [DESIGN.md](DESIGN.md) | Why it is a relay computer; card cage; build philosophy |
 | [docs/RELAY-CPU.md](docs/RELAY-CPU.md) | Emulator = board contract (v0.1 microarchitecture) |
-| [docs/OS-BRINGUP.md](docs/OS-BRINGUP.md) | Ports, UART, CF boot, Contiki/FUZIX notes |
+| [docs/OS-BRINGUP.md](docs/OS-BRINGUP.md) | Ports, UART, CF boot, Clack commands, Contiki/FUZIX notes |
 | [docs/TIMING.md](docs/TIMING.md) | Measured Clack boot / `ls` / echo on the coil clock |
+| [pack/README.md](pack/README.md) | Frozen Windows/Linux apps (v1.0.0) |
 | [RELAY65_HARDWARE_IMPLEMENTATION.md](RELAY65_HARDWARE_IMPLEMENTATION.md) | Datapath reverse-engineering + Design A/B/C relay budgets |
 | [emulator/README.md](emulator/README.md) | Emulator flags, lamps, tests |

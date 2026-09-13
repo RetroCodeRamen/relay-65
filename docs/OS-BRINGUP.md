@@ -1,10 +1,14 @@
 # OS bring-up on Relay-65
 
-The emulator is the machine Contiki and FUZIX will be ported to. Do not
-change this map in an OS port without changing the emulator first.
+The emulator is the machine Contiki and FUZIX run on. Do not change this map
+in an OS port without changing the emulator first.
 
-Your trees: `Source code/contiki-master` (also the `contiki` symlink),
-`Source code/FUZIX-master`.
+To **run** Clack you do not need these trees: download
+[v1.0.0](https://github.com/RetroCodeRamen/relay-65/releases/tag/v1.0.0) or
+`./relay65 --gui --overclock --run --load software/images/console.bin`.
+
+To **rebuild** firmware: `Source code/contiki-master` (also the `contiki`
+symlink), `Source code/FUZIX-master`, and `third_party/cc65`.
 
 ## Frozen software-visible machine
 
@@ -33,11 +37,14 @@ make -C software/cc65
 
 You should see `Relay-65 cc65 runtime`.
 
-## Contiki (hello-world, then a live console)
+## Contiki (hello-world, then Clack)
 
-Platform: `Source code/contiki-master/platform/relay65/`
+Platform: `contiki/platform/relay65/`
 (clock at `$C020`, printf via `software/cc65/write.s`).
 IRQ ACK is `$C023` bit 7 from `software/cc65/crt0.s` (do not call C from IRQ).
+
+Contiki version string in this tree is **3.x** (`contiki/core/contiki-version.h`).
+The shell is **ClackShell 1.0**. `abt` prints those labels.
 
 ```bash
 make -C software/contiki hello
@@ -49,20 +56,22 @@ UART should contain `Hello, world` and `Contiki on Relay-65`.
 Live session. Type in the GUI serial pane; Enter sends CR. The console is a
 C loop (`uart_read_line` → command or BASIC). It does **not** sit in Contiki
 `process_run` / `serial_line_process`. Tick IRQ is off (`TICK_CTRL = 0`).
+`abt` polls UART with `uart_getc` (space / CR, no echo).
 
 ```bash
 make -C software/contiki
-./relay65 --gui --overclock --run --load software/contiki/console.bin
+# also copies to software/images/console.bin (the v1.0.0 download image)
+./relay65 --gui --overclock --run --load software/images/console.bin
 ```
 
-There is no tkinter on this host, so the GUI is the browser at
-http://127.0.0.1:8065 — the green SERIAL box, not the Cursor terminal.
-UART is also copied to the terminal that launched `./relay65`. Wait for
-`Clack` in the motd. Do not press RESET unless you want to restart from $0200.
+`--gui` is a native window when tkinter is installed, otherwise the browser
+at http://127.0.0.1:8065 (green SERIAL box). UART is also copied to the
+terminal that launched `./relay65`. Wait for `Clack` in the motd. Do not
+press RESET unless you want to restart from $0200.
 
 UART starts with the Clack motd, then a `_>` prompt (path prefix when you
 are not in `/`). Type `help` for commands, `man TOPIC` for manuals,
-`ls /bin` for programs.
+`ls /bin` for programs. `man abt` is the about-screen keys.
 
 On the **20 ms/row** coil clock that is **1 min 55 s** to the prompt and
 **38 s** for the first `ls` (datasheet 10 ms/row: 57.7 s and 19.1 s). Details:
@@ -72,8 +81,11 @@ Clack (the shell):
 
 - `ls` / `cd` / `pwd` / `cat` / `echo` — RAM dirs `/` `/bin` `/etc` `/www` `/tmp`
 - `edit` / `ed` — line editor (`/tmp/notes`, `/www/index.html`; `.` saves)
-- `man` / `man basic` — short manuals
-- `clear` `uname` `free` `hd` — scroll, name, RAM left, hex dump
+- `man` / `man basic` / `man abt` — short manuals
+- `abt` — about Relay-65. First line, then wait. Space = next line.
+  Enter = remaining lines with ~10 6502 `NOP`s between them. Enter after
+  the last line returns to `_>`.
+- `clear` `uname` `free` `hd` — scroll, name (`Relay-65 Contiki Clack`), RAM left, hex dump
 - `time` — Contiki clock and `$C020` tick
 - `io` — UART status, bank `$C010`, tick ctrl/IFR (does not read `$C000`)
 - `bank` / `bank NN` — read or write the bank latch

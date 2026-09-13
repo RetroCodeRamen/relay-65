@@ -4,17 +4,25 @@ Python model of the **relay CPU**, not a shortcut 6502 interpreter.
 
 Each 6502 instruction is a list of micro-ops on **one 8-bit bus** through **one ALU**. Packed EEPROM rows (`CW`) are the control card. Modules in `relay65/` are the cards.
 
-Project overview, memory map, and how to run Contiki/BASIC/FUZIX: **[README.md](../README.md)**. Hardware contract: **[docs/RELAY-CPU.md](../docs/RELAY-CPU.md)**. Physical Design B (PC+1, ADDR_SP, 8-bit ±1, relay bus OE) is specified in **[RELAY65_HARDWARE_IMPLEMENTATION.md](../RELAY65_HARDWARE_IMPLEMENTATION.md)**; the emulator control store already uses those bits. Coil times for Clack: **[docs/TIMING.md](../docs/TIMING.md)**.
+Project overview, downloads, and Clack: **[README.md](../README.md)**. Frozen Windows/Linux apps: **[pack/README.md](../pack/README.md)**. Hardware contract: **[docs/RELAY-CPU.md](../docs/RELAY-CPU.md)**. Coil times: **[docs/TIMING.md](../docs/TIMING.md)**.
+
+`--gui` is a native window (tkinter) with the same layout as the browser panel: serial, CLOCK / MEMORY, HOST / REAL / WARP, MACHINE | 6502. If tkinter is missing, the GUI is `http://127.0.0.1:8065`.
 
 ## Run
 
-From the **repo root** (`./relay65` puts `emulator/` on `PYTHONPATH`):
+From the **repo root** (`./relay65` puts `emulator/` on `PYTHONPATH`). Python 3.9+.
 
 ```bash
 python3 -m unittest discover -s emulator/tests -v
 ./relay65 --program emulator/programs/hello.s --max 200
-./relay65 --overclock --load software/cc65/hello.bin --max 400000
+./relay65 --overclock --load software/images/console.bin --gui --run
 ./relay65
+```
+
+Windows checkout (python.org Python):
+
+```text
+py -3 relay65 --gui --overclock --run --load software/images/console.bin
 ```
 
 From this directory:
@@ -25,7 +33,9 @@ python3 -m relay65 --program programs/hello.s --max 200
 python3 -m relay65
 ```
 
-The last command boots the monitor ROM at `$E000`. Type on the host keyboard; that is the UART at `$C000`. Ctrl-C is front-panel HALT.
+The last command boots the monitor ROM at `$E000`. Type on the host keyboard; that is the UART at `$C000`. Ctrl-C is front-panel HALT. Headless stdin UART is POSIX (`select`); use `--gui` on Windows.
+
+`software/images/console.bin` is the v1.0.0 Clack image (Contiki 3.x, ClackShell 1.0). Rebuild with `make -C software/contiki` (needs the `contiki` tree and cc65).
 
 ## Lamps and two consoles
 
@@ -35,22 +45,19 @@ The last command boots the monitor ROM at `$E000`. Type on the host keyboard; th
 
 ```bash
 # lamps + serial, relay-timed clock (~20 ms/microstep)
-./relay65 --gui --load software/cc65/hello.bin
-# click RUN. SPEED cycles RELAY (coils) → 1s=1min (60×) → WARP (host max). HOST/REAL clocks show PC time vs relay time.
+./relay65 --gui --load software/images/console.bin
+# click RUN. SPEED cycles RELAY (coils) → 1s=1min (60×) → WARP (host max).
+# HOST / REAL / WARP: PC time vs how long those rows would take on relays.
 # STEP ROW = one EEPROM word. STEP OP = one 6502 instruction.
 
 ./relay65 --gui --overclock --run --load software/images/console.bin
 ```
 
-If tkinter is missing, the GUI is the browser at `http://127.0.0.1:8065` (green SERIAL box). UART is also copied to the launching terminal.
+`--panel` is a text front panel; serial is TCP (`nc 127.0.0.1 6502` by default). Not Windows (needs termios).
 
-`--panel` is a text front panel; serial is TCP (`nc 127.0.0.1 6502` by default).
+Panel keys: `A`+hex address, `D`+hex data, `E` examine, `N` next, `P` deposit, `O` deposit next, `R` run, `S` stop, space = STEP ROW, `K` = STEP OP, `T` speed, `I` reset, `Q` quit.
 
-Panel keys: `A`+hex address, `D`+hex data, `E` examine, `P` deposit, `R` run, `S` stop, space = STEP ROW, `K` = STEP OP, `I` reset.
-
-`--trace` prints register/IR/MAR/microstep state. `--dump-microcode` writes packed FETCH/RESET/IRQ/NMI/execute images. `--leds` prints Altair-style lamps on stderr.
-
-Build Contiki with `make -C software/contiki` (needs the `contiki` tree and cc65). That uses the `relay65` platform and the same UART as cc65.
+`--trace` prints register/IR/MAR/microstep state. `--dump-microcode` writes packed FETCH/RESET/IRQ/NMI/execute images. `--leds` prints `*` / `.` lamps on stderr.
 
 ## What is intentionally slow
 

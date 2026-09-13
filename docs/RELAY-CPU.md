@@ -166,12 +166,15 @@ releases OE (idle Φ0). It is not one 6502 opcode.
 Φ2  Pulse DST LOAD / MEM_RD sample into DST / MEM_WR; tick I/O Φ2
 ```
 
-v0.1 default oscillator: **10 ms per coil change** (operate 6 ms / release 4 ms
-plus bounce and lag). That is **20 ms per microstep**. `--timing datasheet`
-uses 6+4 ms. `--overclock` or the GUI OVERCLOCK switch runs as fast as the host.
+v0.1 default oscillator is **leeway**: **10 ms per coil change** (operate +
+release each padded to 10 ms). Two phases → **20 ms per microstep**.
+`--timing datasheet` is 6 ms operate + 4 ms release → **10 ms per row**.
+`--overclock` or GUI SPEED **WARP** skips the wait (host as fast as it can).
+GUI SPEED **1s=1min** is 60× the 20 ms clock.
 
-Front panel: HALT freezes the step counter; STEP runs one microstep; RUN
-lets the oscillator clock Φ1/Φ2. The emulator `--trace` is that panel.
+Front panel: HALT freezes the step counter; STEP ROW is one microstep; STEP OP
+is one 6502 instruction; RUN lets the oscillator clock Φ1/Φ2. HOST / REAL /
+WARP on the panel are wall time vs those same rows at the coil clock.
 
 Measured Clack boot and `ls` on this clock: [docs/TIMING.md](TIMING.md).
 
@@ -345,6 +348,8 @@ Front-panel clock: **STEP ROW** is one EEPROM word (Φ0/Φ1/Φ2). **STEP OP** is
 
 Two access paths, same as the finished machine:
 
-- **`--gui`** — serial + both lamp banks + paddles.
+- **`--gui`** — serial + both lamp banks + CLOCK/MEMORY paddles + HOST/REAL/WARP.
+  Tkinter window, or the same layout in a browser at `http://127.0.0.1:8065`.
+  v1.0.0 Windows/Linux apps are this path with Clack preloaded ([pack/README.md](../pack/README.md)).
 - **`--leds`** — `*` / `.` lamp strip on stderr, UART on stdout.
-- **`--panel`** — text panel; UART on TCP port 6502. Space = STEP ROW, `K` = STEP OP.
+- **`--panel`** — POSIX text panel; UART on TCP port 6502. Space = STEP ROW, `K` = STEP OP. Not Windows.

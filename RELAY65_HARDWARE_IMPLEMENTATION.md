@@ -1,11 +1,14 @@
 # Relay-65 hardware implementation (architecture review)
 
-**Status (12 Sep 2026):** this file is the **design history and relay budget**,
-not the live control-store contract. The emulator has already been retargeted
-to Design B fetch (ADDR_PC + PC+1 in one EEPROM row), packed EA/END/ALU
-writeback, ADDR_SP, an 8-bit ±1 helper, and taken-branch ALU muxes. Live
-contract: [`docs/RELAY-CPU.md`](docs/RELAY-CPU.md). Measured Clack times:
-[`docs/TIMING.md`](docs/TIMING.md).
+**Status (13 Sep 2026):** this file is the **design history and relay budget**,
+not the live control-store contract. Software release **v1.0.0** is the Clack
+desktop app (Windows/Linux) plus `software/images/console.bin`. Live CPU
+contract: [`docs/RELAY-CPU.md`](docs/RELAY-CPU.md). How to run:
+[`README.md`](README.md). Measured Clack times: [`docs/TIMING.md`](docs/TIMING.md).
+
+The emulator has already been retargeted to Design B fetch (ADDR_PC + PC+1 in
+one EEPROM row), packed EA/END/ALU writeback, ADDR_SP, an 8-bit ±1 helper, and
+taken-branch ALU muxes.
 
 Early sections still describe the **then-current** 12-row FETCH / ALU PC+1
 machine. That snapshot is kept so the Option A/B/C arithmetic stays

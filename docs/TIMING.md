@@ -8,7 +8,8 @@ Default oscillator: **20 ms per microstep** (10 ms operate + 10 ms release
 leeway). Datasheet parts in `emulator/relay65/timing.py` are 6 ms + 4 ms =
 **10 ms per row**. GUI SPEED `1s=1min` is 60× faster than 20 ms/row.
 
-Measured 12 Sep 2026 against `software/contiki/console.bin`, path
+Measured 12 Sep 2026. Tests load `software/images/console.bin` when that file
+exists (the v1.0.0 shipped image), else `software/contiki/console.bin`. Path
 `ContikiTests._boot_console`: monitor ROM present, program deposited at
 `$0200`, sequencer starts in FETCH. **Not** counted: RESET vector, monitor
 banner, CompactFlash, or typing before `ls`.
