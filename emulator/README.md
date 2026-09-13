@@ -4,7 +4,7 @@ Python model of the **relay CPU**, not a shortcut 6502 interpreter.
 
 Each 6502 instruction is a list of micro-ops on **one 8-bit bus** through **one ALU**. Packed EEPROM rows (`CW`) are the control card. Modules in `relay65/` are the cards.
 
-Project overview, memory map, and how to run Contiki/BASIC/FUZIX: **[README.md](../README.md)**. Hardware contract: **[docs/RELAY-CPU.md](../docs/RELAY-CPU.md)**. Physical Design B (PC+1, relay bus OE) is specified in **[RELAY65_HARDWARE_IMPLEMENTATION.md](../RELAY65_HARDWARE_IMPLEMENTATION.md)** and is **not** substituted in this microcode yet.
+Project overview, memory map, and how to run Contiki/BASIC/FUZIX: **[README.md](../README.md)**. Hardware contract: **[docs/RELAY-CPU.md](../docs/RELAY-CPU.md)**. Physical Design B (PC+1, relay bus OE) is specified in **[RELAY65_HARDWARE_IMPLEMENTATION.md](../RELAY65_HARDWARE_IMPLEMENTATION.md)**; the emulator microcode uses ADDR_PC + hardware PC+1 for fetch.
 
 ## Run
 
@@ -36,7 +36,7 @@ The last command boots the monitor ROM at `$E000`. Type on the host keyboard; th
 ```bash
 # lamps + serial, relay-timed clock (~20 ms/microstep)
 ./relay65 --gui --load software/cc65/hello.bin
-# click RUN. OVERCLOCK = host max speed.
+# click RUN. SPEED cycles RELAY (coils) → 1s=1min (60×) → WARP (host max). HOST/REAL clocks show PC time vs relay time.
 
 ./relay65 --gui --overclock --run --load software/contiki/hello-world.bin
 ```
@@ -53,11 +53,7 @@ Build Contiki with `make -C software/contiki` (needs the `contiki` tree and cc65
 
 ## What is intentionally slow
 
-Program-counter increment on fetch is a **dedicated 16-bit +1** (`CW.pc_inc`).
-Opcode/operand reads put **PC** on A[15:0] (`CW.addr_pc`). FETCH is 2 microsteps;
-`fetch_byte` is 2. Indexed addressing, SP±1, and ADC still share the 8-bit ALU.
-
-A later fused ALU→register writeback is optional Design C, not in this microcode.
+Opcode/operand fetch is Design B: ADDR_PC plus a dedicated PC+1, packed into one EEPROM row (Φ2 loads IR/MDR and PC together). Stack uses ADDR_SP; INX/Y and SP±1 use an 8-bit incrementer. Indexed addressing still shares the one 8-bit ALU. Software-visible PC, memory, and flags stay the same.
 
 ## Memory map (v0.1)
 

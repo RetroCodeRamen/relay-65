@@ -1,8 +1,11 @@
 #include "contiki.h"
 #include "basic.h"
 #include "console.h"
+#include "vfs.h"
+#include "man.h"
+#include "edit.h"
 
-#include <stdio.h>
+#include "uart.h"
 
 #define TICK_LO   (*(volatile unsigned char *)0xC020)
 #define TICK_HI   (*(volatile unsigned char *)0xC021)
@@ -11,9 +14,10 @@
 #define BANK_REG  (*(volatile unsigned char *)0xC010)
 #define UART_STAT (*(volatile unsigned char *)0xC001)
 
+extern unsigned char basic_heaptop[];
+
 static unsigned char watch;
 static unsigned char in_basic;
-static char cmd[SERIAL_LINE_CONF_BUFSIZE];
 static clock_time_t watch_last;
 
 static char
@@ -99,21 +103,51 @@ parsehex(const char *s, unsigned *out)
 }
 
 static void
-copy_line(const char *src)
+print_prompt(void)
 {
-  unsigned i;
-  for(i = 0; i < sizeof(cmd) - 1 && src[i] != 0; i++) {
-    cmd[i] = src[i];
+  const char *p = vfs_cwd();
+  if(!(p[0] == '/' && p[1] == 0)) {
+    uart_puts(p);
   }
-  cmd[i] = 0;
+  uart_puts("_> ");
 }
 
 static void
 do_help(void)
 {
-  printf("help time peek poke io bank watch basic\n");
-  printf("peek ADDR [N]  poke ADDR BYTES..\n");
-  printf("ADDR hex, optional $\n");
+  uart_puts("Clack - ls cd pwd cat echo edit man help\n"
+            "basic time peek poke io bank watch\n"
+            "clear uname free hd\n"
+            "ls /bin - programs    man NAME - manual\n");
+}
+
+static void
+do_free(void)
+{
+  unsigned stack_bot = 0x8000U - 0x0800U;
+  unsigned used_end = (unsigned)basic_heaptop;
+  unsigned ram_free;
+  if(used_end >= stack_bot) {
+    ram_free = 0;
+  } else {
+    ram_free = stack_bot - used_end;
+  }
+  printf("%u bytes ram  %u free\n", 32768U, ram_free);
+}
+
+static void
+do_clear(void)
+{
+  unsigned char i;
+  for(i = 0; i < 8; i++) {
+    putchar('\n');
+  }
+}
+
+static void
+do_uname(void)
+{
+  uart_puts("Relay-65 Contiki Clack\n");
 }
 
 static void
@@ -241,8 +275,43 @@ run_line(char *line)
   if(verb == NULL) {
     return;
   }
+  if((verb[0] == 'l' || verb[0] == 'L') &&
+     (verb[1] == 's' || verb[1] == 'S') && verb[2] == 0) {
+    vfs_ls(nexttok(&p));
+    return;
+  }
   if(cmd_is(verb, "help") || cmd_is(verb, "?")) {
     do_help();
+  } else if(cmd_is(verb, "man")) {
+    {
+      char *t = nexttok(&p);
+      if(t == NULL) {
+        man_list();
+      } else {
+        man_show(t);
+      }
+    }
+  } else if(cmd_is(verb, "cd")) {
+    vfs_cd(nexttok(&p));
+  } else if(cmd_is(verb, "pwd")) {
+    vfs_pwd();
+  } else if(cmd_is(verb, "cat")) {
+    vfs_cat(nexttok(&p));
+  } else if(cmd_is(verb, "echo")) {
+    while(*p == ' ' || *p == '\t') {
+      p++;
+    }
+    printf("%s\n", p);
+  } else if(cmd_is(verb, "edit") || cmd_is(verb, "ed") || cmd_is(verb, "/bin/ed")) {
+    edit_start(nexttok(&p));
+  } else if(cmd_is(verb, "clear")) {
+    do_clear();
+  } else if(cmd_is(verb, "uname")) {
+    do_uname();
+  } else if(cmd_is(verb, "free")) {
+    do_free();
+  } else if(cmd_is(verb, "hd")) {
+    do_peek(&p);
   } else if(cmd_is(verb, "time")) {
     do_time();
   } else if(cmd_is(verb, "io")) {
@@ -255,10 +324,12 @@ run_line(char *line)
     do_watch(&p);
   } else if(cmd_is(verb, "bank")) {
     do_bank(&p);
-  } else if(cmd_is(verb, "basic")) {
+  } else if(cmd_is(verb, "basic") || cmd_is(verb, "/bin/basic")) {
     in_basic = 1;
     basic_banner();
     printf("READY\n");
+  } else if(cmd_is(verb, "clack") || cmd_is(verb, "/bin/clack")) {
+    uart_puts("Clack on Relay-65\n");
   } else {
     printf("? %s  (help)\n", verb);
   }
@@ -269,22 +340,45 @@ console_init(void)
 {
   watch = 0;
   in_basic = 0;
-  watch_last = clock_time();
+  watch_last = 0;
+  vfs_init();
   basic_init();
-  basic_banner();
-  printf("console ready - type basic or help\n");
+  uart_puts(vfs_file("/etc/motd"));
+  print_prompt();
 }
 
 void
 console_on_line(char *line)
 {
-  copy_line(line);
-  if(in_basic) {
-    if(basic_line(cmd)) {
-      in_basic = 0;
+  if(edit_active()) {
+    if(edit_line(line)) {
+      return;
     }
-  } else {
-    run_line(cmd);
+    print_prompt();
+    return;
+  }
+  if(in_basic) {
+    if(basic_line(line)) {
+      in_basic = 0;
+      print_prompt();
+    }
+    return;
+  }
+  if((line[0] == 'l' || line[0] == 'L') &&
+     (line[1] == 's' || line[1] == 'S') &&
+     (line[2] == 0 || line[2] == ' ' || line[2] == '\t')) {
+    if(line[2] == 0) {
+      vfs_ls(0);
+    } else {
+      vfs_ls(line + 2);
+    }
+    print_prompt();
+    return;
+  }
+  run_line(line);
+  vfs_ls_sync();
+  if(!in_basic && !edit_active()) {
+    print_prompt();
   }
 }
 

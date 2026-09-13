@@ -120,8 +120,15 @@ class CW:
     # When pushing P, OR this onto the bus (B+U for PHP/BRK).
     p_or: int = 0
     invert_b: bool = False  # invert ALU_B before ADD (SBC/CMP)
-    addr_pc: bool = False  # A[15:0] = PC (fetch); else MAR
-    pc_inc: bool = False  # dedicated 16-bit PC ← PC+1 on Φ2 (after mem)
+    # Byte 6 coil lines. Not host-only shortcuts.
+    addr_pc: bool = False  # A[15:0] = PC
+    pc_inc: bool = False  # Φ2 LOAD PC from 16-bit +1 (not the bus)
+    addr_sp: bool = False  # A[15:0] = $0100|SP  (+8 DPDT on the address mux)
+    reg_inc: bool = False  # 8-bit +1 into DST (or SP if DST is MEM/NONE)
+    reg_dec: bool = False  # 8-bit −1, same helper (~10–12 DPDT, not a 2nd ALU)
+    alu_a_bus: bool = False  # ALU A-input = live bus, not ALU_A latch (~4 DPDT)
+    alu_b_m7ext: bool = False  # ALU B-input = MDR bit7 extended (~1–4 DPDT)
+    also_alu_b: bool = False  # Φ2 also LOAD ALU_B from the bus (0 extra data relays)
 
     def pack(self) -> bytes:
         """Eight EEPROM bytes. Layout is frozen in docs/RELAY-CPU.md §6."""
@@ -134,7 +141,16 @@ class CW:
         )
         b2 = (self.flags & 0x0F) | (int(self.end) << 4) | (int(self.invert_b) << 5)
         b3 = int(self.end_if) & 0x0F
-        b6 = int(self.addr_pc) | (int(self.pc_inc) << 1)
+        b6 = (
+            int(self.addr_pc)
+            | (int(self.pc_inc) << 1)
+            | (int(self.addr_sp) << 2)
+            | (int(self.reg_inc) << 3)
+            | (int(self.reg_dec) << 4)
+            | (int(self.alu_a_bus) << 5)
+            | (int(self.alu_b_m7ext) << 6)
+            | (int(self.also_alu_b) << 7)
+        )
         return bytes([b0, b1, b2, b3, self.const & 0xFF, self.p_or & 0xFF, b6, 0])
 
     @classmethod
@@ -156,14 +172,29 @@ class CW:
             p_or=raw[5],
             addr_pc=bool(raw[6] & 0x01),
             pc_inc=bool(raw[6] & 0x02),
+            addr_sp=bool(raw[6] & 0x04),
+            reg_inc=bool(raw[6] & 0x08),
+            reg_dec=bool(raw[6] & 0x10),
+            alu_a_bus=bool(raw[6] & 0x20),
+            alu_b_m7ext=bool(raw[6] & 0x40),
+            also_alu_b=bool(raw[6] & 0x80),
         )
 
 
 JAM_WORD = bytes([0xFF] * 8)
 
 
-def xfer(src: Src, dst: Dst, const: int = 0, p_or: int = 0) -> CW:
-    return CW(src=src, dst=dst, const=const, p_or=p_or)
+def xfer(
+    src: Src,
+    dst: Dst,
+    const: int = 0,
+    p_or: int = 0,
+    *,
+    flags: int = 0,
+    end: bool = False,
+    mem_wr: bool = False,
+) -> CW:
+    return CW(src=src, dst=dst, const=const, p_or=p_or, flags=flags, end=end, mem_wr=mem_wr)
 
 
 def alu(op: AluOp, flags: int = 0, cin: Cin = Cin.ZERO, invert_b: bool = False) -> CW:

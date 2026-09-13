@@ -35,9 +35,17 @@ class ALUCard:
             return self.c_latch
         return 0
 
-    def evaluate(self, op: AluOp, cin: Cin, p: int, invert_b: bool) -> int:
-        a = self.a & 0xFF
-        b = self.b & 0xFF
+    def evaluate(
+        self,
+        op: AluOp,
+        cin: Cin,
+        p: int,
+        invert_b: bool,
+        a: int | None = None,
+        b: int | None = None,
+    ) -> int:
+        a = (self.a if a is None else a) & 0xFF
+        b = (self.b if b is None else b) & 0xFF
         if invert_b:
             b ^= 0xFF
         c = self._cin(cin, p)

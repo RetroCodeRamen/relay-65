@@ -391,7 +391,7 @@ def main() -> None:
         m.cpu.pc = 0x0200
         m.cpu.state = "FETCH"
         m.cpu.ustep = 0
-        run_until(m, lambda x: b"console ready" in bytes(x.uart.tx_log), 800_000)
+        run_until(m, lambda x: b"Clack" in bytes(x.uart.tx_log) and b"_> " in bytes(x.uart.tx_log), 800_000)
         out.append(summarize(p))
 
         # idle: extra steps after ready

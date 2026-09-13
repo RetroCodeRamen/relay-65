@@ -34,6 +34,10 @@ HTML = r"""<!DOCTYPE html>
   .sw { width:16px; height:28px; background:#3a3a36; border-radius:3px; cursor:pointer; border:1px solid #111; }
   .sw.on { background:#ddd5c8; }
   .hex { font: 14px ui-monospace, Courier, monospace; margin:8px 16px; }
+  .clocks { margin:4px 16px 10px; display:flex; gap:28px; flex-wrap:wrap; align-items:flex-end; }
+  .clk-lab { color:var(--dim); font: 11px ui-monospace, Courier, monospace; letter-spacing:.06em; }
+  .clk-val { font: 22px ui-monospace, Courier, monospace; color:var(--text); }
+  .clk-note { margin:0 16px 8px; color:var(--dim); font: 12px Helvetica, Arial, sans-serif; }
   .btns { margin:10px 16px; display:flex; gap:8px; flex-wrap:wrap; }
   button { background:#4a4840; color:var(--text); border:1px solid #222; padding:6px 12px; cursor:pointer; }
   button:hover { background:#6a6458; }
@@ -49,9 +53,9 @@ HTML = r"""<!DOCTYPE html>
 </head>
 <body>
   <h1>RELAY-65</h1>
-  <p class="sub">Green box below is the UART. This page is the console — the terminal that launched the emulator is only the server log. RESET restarts a loaded program at $0200.</p>
+  <p class="sub">Green box below is the UART. RUN starts, STOP pauses, STEP is one instruction, RESET rewinds to the program start without changing RUN/STOP. SPEED cycles RELAY (real coils) → 1s=1min (one PC second = one relay minute) → WARP (as fast as this PC).</p>
   <div id="termwrap">
-    <div class="caption">SERIAL UART $C000 — click this box and type (or type anywhere except ADDR/DATA). RESET / CLR TTY wipe this view.</div>
+    <div class="caption">SERIAL UART $C000 — click this box and type (or type anywhere except ADDR/DATA). CLR TTY wipes this view.</div>
     <pre id="term" tabindex="0"></pre>
   </div>
   <div class="panel">
@@ -63,6 +67,12 @@ HTML = r"""<!DOCTYPE html>
     <div class="row" id="statLamps"><span class="lab">STAT</span></div>
   </div>
   <div class="hex" id="hex"></div>
+  <div class="clocks">
+    <div><div class="clk-lab">HOST (this PC, RUN on)</div><div class="clk-val" id="hostT">0.0s</div></div>
+    <div><div class="clk-lab">REAL (relays)</div><div class="clk-val" id="realT">0.0s</div></div>
+    <div><div class="clk-lab">WARP</div><div class="clk-val" id="warpT">—</div></div>
+  </div>
+  <p class="clk-note" id="clockNote">HOST is wall time while RUN is on. REAL is those same microsteps at the relay clock (default 20 ms each) — how long the hardware would have to run to match warp.</p>
   <div class="hex">
     ADDR $<input id="addrHex" class="hexin" maxlength="4" value="0000">
     DATA $<input id="dataHex" class="hexin" maxlength="2" value="00" style="width:2.5em">
@@ -78,7 +88,7 @@ HTML = r"""<!DOCTYPE html>
     <button data-cmd="deposit">DEPOSIT</button>
     <button data-cmd="deposit_next">DEP NEXT</button>
     <button data-cmd="clr_tty">CLR TTY</button>
-    <button data-cmd="overclock">OVERCLOCK</button>
+    <button data-cmd="speed" id="speedBtn">SPEED</button>
   </div>
 <script>
 const addrL = mkLamps("addrLamps", 16);
@@ -200,6 +210,11 @@ async function poll() {
     statNames.forEach(n => statL[n].classList.toggle("on", !!s.stat[n]));
     document.getElementById("hex").textContent =
       `ADDR $${s.addr.toString(16).padStart(4,"0")}  DATA $${s.data.toString(16).padStart(2,"0")}  IR $${s.ir.toString(16).padStart(2,"0")}  PC $${s.pc.toString(16).padStart(4,"0")}  A $${s.a.toString(16).padStart(2,"0")}  ${s.phase}  ${s.halted ? "HALTED" : (s.running && !s.wait ? "RUN" : "STOP")}  ${s.clock}`;
+    if (s.host) document.getElementById("hostT").textContent = s.host;
+    if (s.real) document.getElementById("realT").textContent = s.real;
+    if (s.warp) document.getElementById("warpT").textContent = s.warp;
+    if (s.clock_note) document.getElementById("clockNote").textContent = s.clock_note;
+    if (s.clock) document.getElementById("speedBtn").textContent = s.clock;
     if (typeof s.term_seq === "number" && s.term_seq !== termSeq) {
       termSeq = s.term_seq;
       serial = "";
@@ -271,6 +286,7 @@ class _State:
 
 
 def run_web(machine, burst: int = 800, start_running: bool = False, host: str = "127.0.0.1", port: int = 8065) -> int:
+    machine.clock.reset_runtime()
     machine.running = start_running
     st = _State(machine, burst)
 
@@ -301,6 +317,11 @@ def run_web(machine, burst: int = 800, start_running: bool = False, host: str = 
                     s = sample(st.machine)
                     out = bytes(st.serial)
                     st.serial.clear()
+                    rt = st.machine.clock.runtime_fields()
+                    clock_note = (
+                        f"HOST is wall time while RUN is on. REAL is those same microsteps "
+                        f"at {rt['real_ms']:.0f} ms each — how long the relays would need in real mode."
+                    )
                 self._json(
                     {
                         "addr": s.addr,
@@ -310,6 +331,10 @@ def run_web(machine, burst: int = 800, start_running: bool = False, host: str = 
                         "a": s.a,
                         "phase": s.phase,
                         "clock": st.machine.clock.label(),
+                        "host": rt["host"],
+                        "real": rt["real"],
+                        "warp": rt["warp"],
+                        "clock_note": clock_note,
                         "running": s.running,
                         "wait": s.wait,
                         "halted": st.machine.cpu.halted,
@@ -373,16 +398,13 @@ def _do_cmd(st, body: dict) -> dict:
         machine.clock.sync()
     elif cmd == "stop":
         machine.running = False
-    elif cmd == "overclock":
-        machine.clock.set_overclock(not machine.clock.overclock)
+    elif cmd in ("speed", "overclock"):
+        machine.clock.cycle_speed()
     elif cmd == "step":
         machine.running = False
         machine.cpu.step_instruction()
     elif cmd == "reset":
         machine.restart_loaded()
-        machine.running = True
-        machine.clock.sync()
-        wipe_tty()
     elif cmd == "clr_tty":
         wipe_tty()
     elif cmd == "examine":

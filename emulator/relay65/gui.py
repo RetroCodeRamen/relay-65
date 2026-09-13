@@ -83,6 +83,7 @@ class RelayGui:
     def __init__(self, machine, burst: int = 800, start_running: bool = False) -> None:
         self.machine = machine
         self.burst = burst
+        machine.clock.reset_runtime()
         machine.running = start_running
         machine.clock.sync()
         self.root = tk.Tk()
@@ -151,6 +152,15 @@ class RelayGui:
 
         self.hex_var = tk.StringVar(value="")
         tk.Label(frame, textvariable=self.hex_var, fg=TEXT, bg=BG, font=("Courier", 12)).pack(anchor="w")
+        self.time_var = tk.StringVar(value="")
+        tk.Label(frame, textvariable=self.time_var, fg=TEXT, bg=BG, font=("Courier", 14)).pack(anchor="w", pady=(6, 0))
+        tk.Label(
+            frame,
+            text="HOST = this PC while RUN is on.  REAL = same µsteps at the relay clock (how long hardware would take).",
+            fg=DIM,
+            bg=BG,
+            font=("Courier", 9),
+        ).pack(anchor="w")
 
         btns = tk.Frame(frame, bg=BG)
         btns.pack(anchor="w", pady=4)
@@ -164,9 +174,18 @@ class RelayGui:
             ("DEPOSIT", self._deposit),
             ("DEP NEXT", self._deposit_next),
             ("CLR TTY", self._clear_tty),
-            ("OVERCLOCK", self._overclock),
         ):
             tk.Button(btns, text=label, command=cmd, bg="#4a4840", fg=TEXT, activebackground="#6a6458", relief=tk.RAISED).pack(side=tk.LEFT, padx=3)
+        self.speed_btn = tk.Button(
+            btns,
+            text="SPEED",
+            command=self._cycle_speed,
+            bg="#4a4840",
+            fg=TEXT,
+            activebackground="#6a6458",
+            relief=tk.RAISED,
+        )
+        self.speed_btn.pack(side=tk.LEFT, padx=3)
 
     def _build_terminal(self) -> None:
         wrap = tk.Frame(self.root, bg=BG)
@@ -220,8 +239,9 @@ class RelayGui:
     def _stop(self) -> None:
         self.machine.running = False
 
-    def _overclock(self) -> None:
-        self.machine.clock.set_overclock(not self.machine.clock.overclock)
+    def _cycle_speed(self) -> None:
+        self.machine.clock.cycle_speed()
+        self._refresh_lamps()
 
     def _step(self) -> None:
         self.machine.running = False
@@ -250,9 +270,6 @@ class RelayGui:
 
     def _reset(self) -> None:
         self.machine.restart_loaded()
-        self.machine.running = True
-        self.machine.clock.sync()
-        self._clear_tty()
         self._refresh_lamps()
 
     def _examine(self) -> None:
@@ -300,6 +317,13 @@ class RelayGui:
             f"{'RUN' if s.running and not s.wait else 'STOP'}  "
             f"{self.machine.clock.label()}"
         )
+        rt = self.machine.clock.runtime_fields()
+        self.time_var.set(
+            f"HOST {rt['host']}     REAL {rt['real']}     {rt['warp']}     "
+            f"{rt['real_ms']:.0f} ms/µstep"
+        )
+        if hasattr(self, "speed_btn"):
+            self.speed_btn.config(text=self.machine.clock.label())
 
     def _tick(self) -> None:
         if self.machine.running:

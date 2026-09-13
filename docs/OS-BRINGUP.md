@@ -56,11 +56,18 @@ make -C software/contiki
 There is no tkinter on this host, so the GUI is the browser at
 http://127.0.0.1:8065 — the green SERIAL box, not the Cursor terminal.
 UART is also copied to the terminal that launched `./relay65`. Wait for
-`console ready`. Do not press RESET unless you want to restart from $0200.
+`Clack` in the motd. Do not press RESET unless you want to restart from $0200.
 
-UART starts with a Relay65 BASIC banner (RAM and bytes free), then
-`console ready`. Type `help` or `basic`. Monitor lines:
+UART starts with the Clack motd, then a `_>` prompt (path prefix when you
+are not in `/`). Type `help` for commands, `man TOPIC` for manuals,
+`ls /bin` for programs.
 
+Clack (the shell):
+
+- `ls` / `cd` / `pwd` / `cat` / `echo` — RAM dirs `/` `/bin` `/etc` `/www` `/tmp`
+- `edit` / `ed` — line editor (`/tmp/notes`, `/www/index.html`; `.` saves)
+- `man` / `man basic` — short manuals
+- `clear` `uname` `free` `hd` — scroll, name, RAM left, hex dump
 - `time` — Contiki clock and `$C020` tick
 - `io` — UART status, bank `$C010`, tick ctrl/IFR (does not read `$C000`)
 - `bank` / `bank NN` — read or write the bank latch
@@ -68,10 +75,10 @@ UART starts with a Relay65 BASIC banner (RAM and bytes free), then
 - `poke 7000 aa` — write bytes
 - `watch on` / `watch off` — `[clock N]` heartbeat (off by default)
 - `basic` — enter Relay65 BASIC V1.0 (integer, Tiny BASIC subset).
-  Boot already prints RAM/free. In BASIC: `PRINT`, `LET`, `RUN`, `LIST`, `NEW`,
-  `FRE`, `BYE`. `PEEK`/`POKE` use decimal or `$` hex (`POKE $7000, $AA`).
+  `BYE` returns to Clack. In BASIC: `PRINT`, `LET`, `RUN`, `LIST`, `NEW`,
+  `FRE`. `PEEK`/`POKE` use decimal or `$` hex (`POKE $7000, $AA`).
 
-The console is a C loop (UART → command or BASIC, then one BASIC statement per
+Clack is a C loop (UART → command or BASIC, then one BASIC statement per
 loop). It does not sit inside a Contiki protothread.
 
 ```bash

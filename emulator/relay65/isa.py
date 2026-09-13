@@ -1,11 +1,22 @@
 """6502 execute microprograms: EEPROM contents for the Control card.
 
-FETCH lives in the shared sequencer page. Opcode and operand fetches use
-PC on A[15:0] plus a dedicated 16-bit incrementer (Design B). The general
-ALU still does ADC, EA, SP, INX, and branches.
+FETCH lives in cpu.py (shared sequencer page). Every helper here is a
+list of control words that only move bytes on the one internal bus and
+the one ALU — the same reuse the relay CPU will have.
+
+Packing rules (real coils, fewer EEPROM rows):
+- ADDR_PC + MEM→dst + PC_INC share one row: incrementer does not use the bus;
+  Φ2 strobes dest LOAD and PC LOAD together (Design B dual-LOAD).
+- ALU op + DST share one row: Φ1 evaluates, Φ2 loads the result.
+- END is a bit on the last useful row, not an empty extra row (except NOP).
+- N/Z for loads/transfers sample the internal bus; C/V still come from the ALU.
+- ADDR_SP + REG_DEC share a stack write; REG_INC/DEC is an 8-bit helper, not a
+  second ALU. Taken branches use ALU_A from the bus and ALU_B from M7EXT.
 """
 
 from __future__ import annotations
+
+from dataclasses import replace
 
 from .signals import (
     END,
@@ -21,88 +32,91 @@ from .signals import (
     FLG_NZCV,
     FLG_NVZ,
     Src,
-    alu,
     xfer,
 )
 
 
-def pc_to_mar() -> list[CW]:
-    return [xfer(Src.PCL, Dst.MARL), xfer(Src.PCH, Dst.MARH)]
+def mem_to(dst: Dst, *, flags: int = 0, end: bool = False) -> CW:
+    """Data cycle: MAR on A[15:0], MEM → dst."""
+    return CW(src=Src.MEM, dst=dst, mem_rd=True, flags=flags, end=end)
 
 
 def mem_to_mdr() -> list[CW]:
-    return [CW(src=Src.MEM, dst=Dst.MDR, mem_rd=True)]
+    return [mem_to(Dst.MDR)]
 
 
-def mdr_write() -> list[CW]:
-    return [CW(src=Src.MDR, dst=Dst.MEM, mem_wr=True)]
+def alu_to(
+    dst: Dst,
+    op: AluOp,
+    *,
+    flags: int = 0,
+    cin: Cin = Cin.ZERO,
+    invert_b: bool = False,
+    end: bool = False,
+    mem_wr: bool = False,
+) -> CW:
+    """Φ1 ALU evaluate, Φ2 load dest from ALU OE (fused writeback, 0 extra relays)."""
+    return CW(
+        src=Src.ALU,
+        dst=dst,
+        alu=op,
+        flags=flags,
+        cin=cin,
+        invert_b=invert_b,
+        end=end,
+        mem_wr=mem_wr,
+    )
 
 
 def pc_inc() -> list[CW]:
-    """PC ← PC+1 on the dedicated incrementer (Φ2 LOAD). Does not touch P."""
+    """One EEPROM row: Φ2 loads PC from the dedicated +1 network.
+
+    Not an emulator skip. Hardware still waits a coil phase for that LOAD.
+    The general ALU is unused (Design B: ~16 DPDT incrementer, not a second ALU).
+    """
     return [CW(pc_inc=True)]
 
 
-def sp_dec() -> list[CW]:
-    return [
-        xfer(Src.SP, Dst.ALU_A),
-        xfer(Src.CONST, Dst.ALU_B, 0xFF),
-        alu(AluOp.ADD),
-        xfer(Src.ALU, Dst.SP),
-    ]
-
-
-def sp_inc() -> list[CW]:
-    return [
-        xfer(Src.SP, Dst.ALU_A),
-        xfer(Src.CONST, Dst.ALU_B, 1),
-        alu(AluOp.ADD),
-        xfer(Src.ALU, Dst.SP),
-    ]
-
-
-def mar_stack() -> list[CW]:
-    return [xfer(Src.SP, Dst.MARL), xfer(Src.CONST, Dst.MARH, 1)]
+def fetch_into(
+    dst: Dst,
+    *,
+    flags: int = 0,
+    end: bool = False,
+    inc: bool = True,
+    also_alu_b: bool = False,
+) -> CW:
+    """Opcode/operand fetch: PC on A[15:0], data → dst, optional PC+1 on the same Φ2."""
+    return CW(
+        src=Src.MEM,
+        dst=dst,
+        mem_rd=True,
+        addr_pc=True,
+        pc_inc=inc,
+        flags=flags,
+        end=end,
+        also_alu_b=also_alu_b,
+    )
 
 
 def fetch_byte() -> list[CW]:
-    """Operand fetch: PHASE1 PC→memory→MDR (inc evaluates); PHASE2 PC←PC+1."""
-    return [
-        CW(src=Src.MEM, dst=Dst.MDR, mem_rd=True, addr_pc=True),
-        CW(pc_inc=True),
-    ]
+    """Operand fetch, Design B packed into one row.
 
-
-def pass_to(dst: Dst, flags: int = 0) -> list[CW]:
-    steps = [xfer(Src.MDR, Dst.ALU_A), alu(AluOp.PASS_A, flags=flags)]
-    if dst != Dst.NONE:
-        steps.append(xfer(Src.ALU, dst))
-    return steps
-
-
-def add8(dst_hi: Dst, dst_lo: Dst, src_add: Src) -> list[CW]:
-    """(dst_hi:dst_lo) ← (MDR as lo already in T?) used for abs,X style.
-
-    Expects lo in ALU-bound sequence: T holds lo, MDR holds hi, add src_add to lo.
+    Φ1: ADDR_PC (8 DPDT) + memory OE; incrementer evaluates from PC Q.
+    Φ2: LOAD dest from the data bus and LOAD PC from +1 (two LOADs, different
+    registers; incrementer does not use the bus). Data cycles still copy EA
+    into MAR.
     """
-    return [
-        xfer(Src.T, Dst.ALU_A),
-        xfer(src_add, Dst.ALU_B),
-        alu(AluOp.ADD),
-        xfer(Src.ALU, dst_lo),
-        xfer(Src.MDR, Dst.ALU_A),
-        xfer(Src.CONST, Dst.ALU_B, 0),
-        alu(AluOp.ADC, cin=Cin.LATCH),
-        xfer(Src.ALU, dst_hi),
-    ]
+    return [fetch_into(Dst.MDR)]
 
 
 def FETCH() -> list[CW]:
-    """Opcode fetch: PHASE1 PC→memory→IR; PHASE2 PC←PC+1. Then EXEC."""
-    return [
-        CW(src=Src.MEM, dst=Dst.IR, mem_rd=True, addr_pc=True),
-        CW(pc_inc=True),
-    ]
+    """Opcode fetch, Design B packed into one row (not a host skip).
+
+    Same coils as the two-phase Option C fetch: ADDR_PC + MEM → IR + PC←PC+1.
+    Dual Φ2 LOAD is allowed in the hardware write-up; splitting IR then PC is
+    only needed if the LOAD current spike is ugly.
+    """
+    return [fetch_into(Dst.IR)]
 
 
 def RESET() -> list[CW]:
@@ -110,10 +124,48 @@ def RESET() -> list[CW]:
     return [
         xfer(Src.CONST, Dst.MARL, 0xFC),
         xfer(Src.CONST, Dst.MARH, 0xFF),
-    ] + mem_to_mdr() + [xfer(Src.MDR, Dst.PCL)] + [
+        mem_to(Dst.PCL),
         xfer(Src.CONST, Dst.MARL, 0xFD),
         xfer(Src.CONST, Dst.MARH, 0xFF),
-    ] + mem_to_mdr() + [xfer(Src.MDR, Dst.PCH), END()]
+        mem_to(Dst.PCH, end=True),
+    ]
+
+
+def sp_dec() -> list[CW]:
+    """One row: 8-bit helper −1 into SP. Address still uses SP Q on this Φ1."""
+    return [CW(dst=Dst.SP, reg_dec=True)]
+
+
+def sp_inc() -> list[CW]:
+    return [CW(dst=Dst.SP, reg_inc=True)]
+
+
+def mar_stack() -> list[CW]:
+    return [xfer(Src.SP, Dst.MARL), xfer(Src.CONST, Dst.MARH, 1)]
+
+
+def with_end(rows: list[CW]) -> list[CW]:
+    return [*rows[:-1], replace(rows[-1], end=True)]
+
+
+def push_src(src: Src, p_or: int = 0) -> list[CW]:
+    """Write SRC to $0100|SP, then SP−1, one row. ADDR_SP uses SP Q before the LOAD."""
+    return [CW(src=src, dst=Dst.MEM, mem_wr=True, addr_sp=True, reg_dec=True, p_or=p_or)]
+
+
+def add8(dst_hi: Dst, dst_lo: Dst, src_add: Src) -> list[CW]:
+    """(dst_hi:dst_lo) ← T + src_add, MDR as high + carry.
+
+    Expects lo in T, hi in MDR.
+    """
+    return [
+        xfer(Src.T, Dst.ALU_A),
+        xfer(src_add, Dst.ALU_B),
+        alu_to(dst_lo, AluOp.ADD),
+        xfer(Src.MDR, Dst.ALU_A),
+        xfer(Src.CONST, Dst.ALU_B, 0),
+        alu_to(dst_hi, AluOp.ADC, cin=Cin.LATCH),
+    ]
 
 
 # --- addressing: leave EA in MAR, or operand in MDR for immediate ---
@@ -123,65 +175,55 @@ def ea_imm() -> list[CW]:
 
 
 def ea_zp() -> list[CW]:
-    return fetch_byte() + [xfer(Src.MDR, Dst.MARL), xfer(Src.CONST, Dst.MARH, 0)]
+    return [fetch_into(Dst.MARL), xfer(Src.CONST, Dst.MARH, 0)]
 
 
 def ea_zpx() -> list[CW]:
-    return fetch_byte() + [
-        xfer(Src.MDR, Dst.ALU_A),
+    return [
+        fetch_into(Dst.ALU_A),
         xfer(Src.X, Dst.ALU_B),
-        alu(AluOp.ADD),
-        xfer(Src.ALU, Dst.MARL),
+        alu_to(Dst.MARL, AluOp.ADD),
         xfer(Src.CONST, Dst.MARH, 0),
     ]
 
 
 def ea_zpy() -> list[CW]:
-    return fetch_byte() + [
-        xfer(Src.MDR, Dst.ALU_A),
+    return [
+        fetch_into(Dst.ALU_A),
         xfer(Src.Y, Dst.ALU_B),
-        alu(AluOp.ADD),
-        xfer(Src.ALU, Dst.MARL),
+        alu_to(Dst.MARL, AluOp.ADD),
         xfer(Src.CONST, Dst.MARH, 0),
     ]
 
 
 def ea_abs() -> list[CW]:
-    return (
-        fetch_byte()
-        + [xfer(Src.MDR, Dst.T)]
-        + fetch_byte()
-        + [xfer(Src.T, Dst.MARL), xfer(Src.MDR, Dst.MARH)]
-    )
+    return [fetch_into(Dst.MARL), fetch_into(Dst.MARH)]
 
 
 def ea_absx() -> list[CW]:
-    return fetch_byte() + [xfer(Src.MDR, Dst.T)] + fetch_byte() + add8(Dst.MARH, Dst.MARL, Src.X)
+    return [fetch_into(Dst.T), fetch_into(Dst.MDR)] + add8(Dst.MARH, Dst.MARL, Src.X)
 
 
 def ea_absy() -> list[CW]:
-    return fetch_byte() + [xfer(Src.MDR, Dst.T)] + fetch_byte() + add8(Dst.MARH, Dst.MARL, Src.Y)
+    return [fetch_into(Dst.T), fetch_into(Dst.MDR)] + add8(Dst.MARH, Dst.MARL, Src.Y)
 
 
 def zp_ptr_to_t_mdr() -> list[CW]:
-    """Read (zp) with 6502 zp wrap: lo from zp, hi from zp+1 wrapped."""
+    """Read (zp) with 6502 zp wrap: lo from zp, hi from zp+1 wrapped. Pointer in MDR."""
     return [
         xfer(Src.MDR, Dst.MARL),
         xfer(Src.CONST, Dst.MARH, 0),
-    ] + mem_to_mdr() + [xfer(Src.MDR, Dst.T)] + [
-        xfer(Src.MARL, Dst.ALU_A),
-        xfer(Src.CONST, Dst.ALU_B, 1),
-        alu(AluOp.ADD),
-        xfer(Src.ALU, Dst.MARL),
-    ] + mem_to_mdr()
+        mem_to(Dst.T),
+        CW(dst=Dst.MARL, reg_inc=True),
+        mem_to(Dst.MDR),
+    ]
 
 
 def ea_indx() -> list[CW]:
-    return fetch_byte() + [
-        xfer(Src.MDR, Dst.ALU_A),
+    return [
+        fetch_into(Dst.ALU_A),
         xfer(Src.X, Dst.ALU_B),
-        alu(AluOp.ADD),
-        xfer(Src.ALU, Dst.MDR),
+        alu_to(Dst.MDR, AluOp.ADD),
     ] + zp_ptr_to_t_mdr() + [xfer(Src.T, Dst.MARL), xfer(Src.MDR, Dst.MARH)]
 
 
@@ -189,12 +231,10 @@ def ea_indy() -> list[CW]:
     return fetch_byte() + zp_ptr_to_t_mdr() + [
         xfer(Src.T, Dst.ALU_A),
         xfer(Src.Y, Dst.ALU_B),
-        alu(AluOp.ADD),
-        xfer(Src.ALU, Dst.MARL),
+        alu_to(Dst.MARL, AluOp.ADD),
         xfer(Src.MDR, Dst.ALU_A),
         xfer(Src.CONST, Dst.ALU_B, 0),
-        alu(AluOp.ADC, cin=Cin.LATCH),
-        xfer(Src.ALU, Dst.MARH),
+        alu_to(Dst.MARH, AluOp.ADC, cin=Cin.LATCH),
     ]
 
 
@@ -212,141 +252,143 @@ EA = {
 
 
 def ld(dst: Dst, mode: str) -> list[CW]:
-    s = EA[mode]()
-    if mode != "imm":
-        s += mem_to_mdr()
-    return s + pass_to(dst, FLG_NZ) + [END()]
+    if mode == "imm":
+        return [fetch_into(dst, flags=FLG_NZ, end=True)]
+    return EA[mode]() + [mem_to(dst, flags=FLG_NZ, end=True)]
 
 
 def st(src: Src, mode: str) -> list[CW]:
-    return EA[mode]() + [xfer(src, Dst.MDR)] + mdr_write() + [END()]
+    return EA[mode]() + [CW(src=src, dst=Dst.MEM, mem_wr=True, end=True)]
 
 
-def binary(mode: str, op: AluOp, flags: int, invert_b: bool = False, cin: Cin = Cin.ZERO, write_a: bool = True) -> list[CW]:
-    s = EA[mode]()
-    if mode != "imm":
-        s += mem_to_mdr()
+def binary(
+    mode: str,
+    op: AluOp,
+    flags: int,
+    invert_b: bool = False,
+    cin: Cin = Cin.ZERO,
+    write_a: bool = True,
+) -> list[CW]:
+    if mode == "imm":
+        s = [fetch_into(Dst.ALU_B)]
+    else:
+        s = EA[mode]() + [mem_to(Dst.ALU_B)]
     s += [
         xfer(Src.A, Dst.ALU_A),
-        xfer(Src.MDR, Dst.ALU_B),
-        alu(op, flags=flags, cin=cin, invert_b=invert_b),
+        alu_to(
+            Dst.A if write_a else Dst.NONE,
+            op,
+            flags=flags,
+            cin=cin,
+            invert_b=invert_b,
+            end=True,
+        ),
     ]
-    if write_a:
-        s.append(xfer(Src.ALU, Dst.A))
-    s.append(END())
     return s
 
 
 def cmp_reg(src: Src, mode: str) -> list[CW]:
-    s = EA[mode]()
-    if mode != "imm":
-        s += mem_to_mdr()
+    if mode == "imm":
+        s = [fetch_into(Dst.ALU_B)]
+    else:
+        s = EA[mode]() + [mem_to(Dst.ALU_B)]
     return s + [
         xfer(src, Dst.ALU_A),
-        xfer(Src.MDR, Dst.ALU_B),
-        alu(AluOp.ADC, flags=FLG_NZC, cin=Cin.ONE, invert_b=True),
-        END(),
+        alu_to(Dst.NONE, AluOp.ADC, flags=FLG_NZC, cin=Cin.ONE, invert_b=True, end=True),
     ]
 
 
 def bit_mode(mode: str) -> list[CW]:
-    return EA[mode]() + mem_to_mdr() + [
+    return EA[mode]() + [
+        mem_to(Dst.ALU_B),
         xfer(Src.A, Dst.ALU_A),
-        xfer(Src.MDR, Dst.ALU_B),
-        alu(AluOp.BIT, flags=FLG_NVZ),
-        END(),
+        alu_to(Dst.NONE, AluOp.BIT, flags=FLG_NVZ, end=True),
     ]
 
 
 def rmw(mode: str, op: AluOp, cin: Cin = Cin.ZERO) -> list[CW]:
-    return EA[mode]() + mem_to_mdr() + [
-        xfer(Src.MDR, Dst.ALU_A),
-        alu(op, flags=FLG_NZC if op != AluOp.ADD else FLG_NZ, cin=cin),
-        xfer(Src.ALU, Dst.MDR),
-    ] + mdr_write() + [END()]
+    return EA[mode]() + [
+        mem_to(Dst.ALU_A),
+        alu_to(
+            Dst.MEM,
+            op,
+            flags=FLG_NZC if op != AluOp.ADD else FLG_NZ,
+            cin=cin,
+            mem_wr=True,
+            end=True,
+        ),
+    ]
 
 
 def incdec(mode: str, delta: int) -> list[CW]:
-    return EA[mode]() + mem_to_mdr() + [
-        xfer(Src.MDR, Dst.ALU_A),
+    return EA[mode]() + [
+        mem_to(Dst.ALU_A),
         xfer(Src.CONST, Dst.ALU_B, delta & 0xFF),
-        alu(AluOp.ADD, flags=FLG_NZ),
-        xfer(Src.ALU, Dst.MDR),
-    ] + mdr_write() + [END()]
+        alu_to(Dst.MEM, AluOp.ADD, flags=FLG_NZ, mem_wr=True, end=True),
+    ]
 
 
 def acc_shift(op: AluOp, cin: Cin) -> list[CW]:
     return [
         xfer(Src.A, Dst.ALU_A),
-        alu(op, flags=FLG_NZC, cin=cin),
-        xfer(Src.ALU, Dst.A),
-        END(),
+        alu_to(Dst.A, op, flags=FLG_NZC, cin=cin, end=True),
     ]
 
 
 def inc_reg(srcdst: Src, dst: Dst, delta: int) -> list[CW]:
-    return [
-        xfer(srcdst, Dst.ALU_A),
-        xfer(Src.CONST, Dst.ALU_B, delta & 0xFF),
-        alu(AluOp.ADD, flags=FLG_NZ),
-        xfer(Src.ALU, dst),
-        END(),
-    ]
+    return [CW(dst=dst, flags=FLG_NZ, end=True, reg_inc=delta > 0, reg_dec=delta < 0)]
 
 
 def transfer(src: Src, dst: Dst, flags: bool = True) -> list[CW]:
-    s = [xfer(src, Dst.ALU_A), alu(AluOp.PASS_A, flags=FLG_NZ if flags else 0), xfer(Src.ALU, dst), END()]
-    return s
+    return [CW(src=src, dst=dst, flags=FLG_NZ if flags else 0, end=True)]
 
 
-def p_and(mask: int) -> list[CW]:
+def p_and(mask: int, end: bool = True) -> list[CW]:
     return [
         xfer(Src.P, Dst.ALU_A),
         xfer(Src.CONST, Dst.ALU_B, mask),
-        alu(AluOp.AND),
-        xfer(Src.ALU, Dst.P),
-        END(),
+        alu_to(Dst.P, AluOp.AND, end=end),
     ]
 
 
-def p_or(mask: int) -> list[CW]:
+def p_or(mask: int, end: bool = True) -> list[CW]:
     return [
         xfer(Src.P, Dst.ALU_A),
         xfer(Src.CONST, Dst.ALU_B, mask),
-        alu(AluOp.OR),
-        xfer(Src.ALU, Dst.P),
-        END(),
+        alu_to(Dst.P, AluOp.OR, end=end),
     ]
 
 
-def push_mdr() -> list[CW]:
-    return mar_stack() + mdr_write() + sp_dec()
-
-
-def pop_mdr() -> list[CW]:
-    return sp_inc() + mar_stack() + mem_to_mdr()
+def pop_to(dst: Dst, *, flags: int = 0, end: bool = False) -> list[CW]:
+    return [
+        CW(dst=Dst.SP, reg_inc=True),
+        CW(src=Src.MEM, dst=dst, mem_rd=True, addr_sp=True, flags=flags, end=end),
+    ]
 
 
 def branch(end_if: Cond) -> list[CW]:
-    return fetch_byte() + [
+    return [
+        fetch_into(Dst.MDR, also_alu_b=True),
         CW(end_if=end_if),
-        xfer(Src.PCL, Dst.ALU_A),
-        xfer(Src.MDR, Dst.ALU_B),
-        alu(AluOp.ADD),
-        xfer(Src.ALU, Dst.PCL),
-        xfer(Src.PCH, Dst.ALU_A),
-        xfer(Src.M7EXT, Dst.ALU_B),
-        alu(AluOp.ADC, cin=Cin.LATCH),
-        xfer(Src.ALU, Dst.PCH),
-        END(),
+        CW(src=Src.PCL, dst=Dst.PCL, alu=AluOp.ADD, alu_a_bus=True),
+        CW(
+            src=Src.PCH,
+            dst=Dst.PCH,
+            alu=AluOp.ADC,
+            cin=Cin.LATCH,
+            alu_a_bus=True,
+            alu_b_m7ext=True,
+            end=True,
+        ),
     ]
 
 
 def jmp_abs() -> list[CW]:
-    return fetch_byte() + [xfer(Src.MDR, Dst.T)] + fetch_byte() + [
-        xfer(Src.T, Dst.PCL),
-        xfer(Src.MDR, Dst.PCH),
-        END(),
+    # Hi byte overwrites PCH; do not PC+1 on that row (Φ2 would increment the new PC).
+    return [
+        fetch_into(Dst.T),
+        fetch_into(Dst.PCH, inc=False),
+        xfer(Src.T, Dst.PCL, end=True),
     ]
 
 
@@ -354,65 +396,49 @@ def jmp_ind() -> list[CW]:
     """NMOS: increment MARL only, no carry into MARH."""
     return (
         ea_abs()
-        + mem_to_mdr()
-        + [xfer(Src.MDR, Dst.T)]
         + [
-            xfer(Src.MARL, Dst.ALU_A),
-            xfer(Src.CONST, Dst.ALU_B, 1),
-            alu(AluOp.ADD),
-            xfer(Src.ALU, Dst.MARL),
+            mem_to(Dst.T),
+            CW(dst=Dst.MARL, reg_inc=True),
+            mem_to(Dst.PCH),
+            xfer(Src.T, Dst.PCL, end=True),
         ]
-        + mem_to_mdr()
-        + [xfer(Src.T, Dst.PCL), xfer(Src.MDR, Dst.PCH), END()]
     )
 
 
 def jsr() -> list[CW]:
     return (
-        fetch_byte()
-        + [xfer(Src.MDR, Dst.T)]
-        + mar_stack()
-        + [xfer(Src.PCH, Dst.MDR)]
-        + mdr_write()
-        + sp_dec()
-        + mar_stack()
-        + [xfer(Src.PCL, Dst.MDR)]
-        + mdr_write()
-        + sp_dec()
-        + fetch_byte()
-        + [xfer(Src.T, Dst.PCL), xfer(Src.MDR, Dst.PCH), END()]
+        [fetch_into(Dst.T)]
+        + push_src(Src.PCH)
+        + push_src(Src.PCL)
+        + [
+            fetch_into(Dst.PCH, inc=False),
+            xfer(Src.T, Dst.PCL, end=True),
+        ]
     )
 
 
 def rts() -> list[CW]:
-    return pop_mdr() + [xfer(Src.MDR, Dst.PCL)] + pop_mdr() + [xfer(Src.MDR, Dst.PCH)] + pc_inc() + [END()]
+    return pop_to(Dst.PCL) + pop_to(Dst.PCH) + [CW(pc_inc=True, end=True)]
 
 
 def rti() -> list[CW]:
-    return (
-        pop_mdr()
-        + [xfer(Src.MDR, Dst.P)]
-        + pop_mdr()
-        + [xfer(Src.MDR, Dst.PCL)]
-        + pop_mdr()
-        + [xfer(Src.MDR, Dst.PCH), END()]
-    )
+    return pop_to(Dst.P) + pop_to(Dst.PCL) + pop_to(Dst.PCH, end=True)
 
 
 def pha() -> list[CW]:
-    return [xfer(Src.A, Dst.MDR)] + push_mdr() + [END()]
+    return with_end(push_src(Src.A))
 
 
 def php() -> list[CW]:
-    return [xfer(Src.P, Dst.MDR, p_or=FU | FB)] + push_mdr() + [END()]
+    return with_end(push_src(Src.P, p_or=FU | FB))
 
 
 def pla() -> list[CW]:
-    return pop_mdr() + pass_to(Dst.A, FLG_NZ) + [END()]
+    return pop_to(Dst.A, flags=FLG_NZ, end=True)
 
 
 def plp() -> list[CW]:
-    return pop_mdr() + [xfer(Src.MDR, Dst.P), END()]
+    return pop_to(Dst.P, end=True)
 
 
 def brk() -> list[CW]:
@@ -432,31 +458,18 @@ def interrupt(vector: int, status_or: int) -> list[CW]:
     lo = vector & 0xFF
     hi = (vector >> 8) & 0xFF
     return (
-        mar_stack()
-        + [xfer(Src.PCH, Dst.MDR)]
-        + mdr_write()
-        + sp_dec()
-        + mar_stack()
-        + [xfer(Src.PCL, Dst.MDR)]
-        + mdr_write()
-        + sp_dec()
-        + mar_stack()
-        + [xfer(Src.P, Dst.MDR, p_or=status_or)]
-        + mdr_write()
-        + sp_dec()
-        + p_or(0x04)[:-1]
+        push_src(Src.PCH)
+        + push_src(Src.PCL)
+        + push_src(Src.P, p_or=status_or)
+        + p_or(0x04, end=False)
         + [
             xfer(Src.CONST, Dst.MARL, lo),
             xfer(Src.CONST, Dst.MARH, hi),
-        ]
-        + mem_to_mdr()
-        + [xfer(Src.MDR, Dst.PCL)]
-        + [
+            mem_to(Dst.PCL),
             xfer(Src.CONST, Dst.MARL, (lo + 1) & 0xFF),
             xfer(Src.CONST, Dst.MARH, hi),
+            mem_to(Dst.PCH, end=True),
         ]
-        + mem_to_mdr()
-        + [xfer(Src.MDR, Dst.PCH), END()]
     )
 
 

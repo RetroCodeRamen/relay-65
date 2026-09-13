@@ -19,6 +19,8 @@ from .signals import (
     CW,
     Cond,
     Dst,
+    FLG_N,
+    FLG_Z,
     FN,
     FV,
     FC,
@@ -42,8 +44,8 @@ class CPU:
         self.microcycles = 0
         self.instructions = 0
         self.last_bus = 0
-        self.last_addr = 0
         self.nmi_edge = False
+        self._mem_addr = 0
 
     @property
     def a(self) -> int:
@@ -87,8 +89,7 @@ class CPU:
         return (
             f"A={self.reg.a:02X} X={self.reg.x:02X} Y={self.reg.y:02X} "
             f"SP={self.reg.sp:02X} PC={self.addr.pc:04X} P={self.reg.p:02X} "
-            f"IR={self.addr.ir:02X} MAR={self.addr.mar:04X} "
-            f"ABus={self.last_addr:04X} {self.state} "
+            f"IR={self.addr.ir:02X} MAR={self.addr.mar:04X} {self.state} "
             f"u={self.ustep} Φ{self.phi}"
         )
 
@@ -222,19 +223,45 @@ class CPU:
         if src == Src.ALU:
             return self.alu.result
         if src == Src.MEM:
-            return self.memory.read(self._mem_ea(cw))
+            return self.memory.read(self._mem_addr)
         return 0
 
-    def _mem_ea(self, cw: CW) -> int:
-        """System A[15:0]: PC when ADDR_PC, else MAR (EA / stack / vectors)."""
-        return self.addr.pc if cw.addr_pc else self.addr.mar
+    def _get8(self, dst: Dst) -> int:
+        r, a = self.reg, self.addr
+        if dst == Dst.A:
+            return r.a
+        if dst == Dst.X:
+            return r.x
+        if dst == Dst.Y:
+            return r.y
+        if dst == Dst.SP:
+            return r.sp
+        if dst == Dst.T:
+            return r.t
+        if dst == Dst.MARL:
+            return a.marl
+        if dst == Dst.MARH:
+            return a.marh
+        if dst == Dst.MDR:
+            return a.mdr
+        if dst == Dst.P:
+            return r.p
+        return 0
+
+    def _apply_nz(self, value: int, mask: int) -> None:
+        p = self.reg.p
+        if mask & FLG_N:
+            p = (p & ~FN) | (FN if value & 0x80 else 0)
+        if mask & FLG_Z:
+            p = (p & ~FZ) | (FZ if (value & 0xFF) == 0 else 0)
+        self.reg.p = p | FU
 
     def _load(self, dst: Dst, value: int, mem_wr: bool) -> None:
         value &= 0xFF
         r, a = self.reg, self.addr
         if dst == Dst.NONE:
             if mem_wr:
-                self.memory.write(a.mar, self.last_bus)
+                self.memory.write(self._mem_addr, self.last_bus)
             return
         if dst == Dst.A:
             r.a = value
@@ -265,35 +292,50 @@ class CPU:
         elif dst == Dst.IR:
             a.ir = value
         elif dst == Dst.MEM:
-            self.memory.write(a.mar, value)
+            self.memory.write(self._mem_addr, value)
 
     def _phi1(self, cw: CW) -> None:
-        if cw.mem_rd or cw.src == Src.MEM:
-            ea = self._mem_ea(cw)
-            self.last_addr = ea
-            bus = self.memory.read(ea)
+        self._mem_addr = self.addr.address_bus(cw.addr_pc, cw.addr_sp, self.reg.sp)
+        if cw.mem_rd:
+            bus = self.memory.read(self._mem_addr)
         else:
             bus = self._drive(cw)
         self.last_bus = bus
         if cw.alu != AluOp.NOP:
-            self.alu.evaluate(cw.alu, cw.cin, self.reg.p, cw.invert_b)
-        if cw.src == Src.ALU:
+            a = bus if cw.alu_a_bus else None
+            b = (0xFF if self.addr.mdr & 0x80 else 0x00) if cw.alu_b_m7ext else None
+            self.alu.evaluate(cw.alu, cw.cin, self.reg.p, cw.invert_b, a=a, b=b)
             self.last_bus = self.alu.result
 
     def _phi2(self, cw: CW) -> None:
-        if cw.flags:
-            self.reg.p = self.alu.apply_flags(self.reg.p, cw.flags)
-        bus = self.last_bus
-        if cw.src == Src.ALU:
+        bus_in = self.last_bus
+        if cw.alu != AluOp.NOP:
             bus = self.alu.result
             self.last_bus = bus
-        if cw.mem_wr:
-            self.last_addr = self._mem_ea(cw)
-        if cw.dst != Dst.NONE or cw.mem_wr:
-            self._load(cw.dst, bus, cw.mem_wr)
+        else:
+            bus = bus_in
+        if cw.flags:
+            if cw.alu != AluOp.NOP:
+                self.reg.p = self.alu.apply_flags(self.reg.p, cw.flags)
+            elif not (cw.reg_inc or cw.reg_dec):
+                self._apply_nz(bus_in, cw.flags)
+        inc = cw.reg_inc or cw.reg_dec
+        inc_dst = cw.dst if cw.dst not in (Dst.NONE, Dst.MEM) else Dst.SP
+        if cw.dst == Dst.MEM or cw.mem_wr:
+            self._load(Dst.MEM, bus, True)
+        elif cw.dst != Dst.NONE and not (inc and cw.dst == inc_dst):
+            self._load(cw.dst, bus, False)
+        if cw.also_alu_b:
+            self.alu.b = bus_in & 0xFF
+        if inc:
+            delta = 1 if cw.reg_inc else -1
+            val = (self._get8(inc_dst) + delta) & 0xFF
+            self._load(inc_dst, val, False)
+            if cw.flags and cw.alu == AluOp.NOP:
+                self._apply_nz(val, cw.flags)
         if cw.pc_inc:
-            # After the memory sample so fetch sees the pre-increment PC.
-            self.addr.pc = (self.addr.pc + 1) & 0xFFFF
+            # Dedicated incrementer; may share this Φ2 with a dest LOAD.
+            self.addr.load_pc_plus1()
 
     def run(self, max_instructions: int | None = None) -> None:
         while not self.halted:

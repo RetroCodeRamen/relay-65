@@ -9,15 +9,15 @@ The Python emulator under `emulator/` is the **behavioral reference**. Contiki (
 | Layer | State |
 | --- | --- |
 | ISA / binaries | Official NMOS 6502; illegal opcodes jam. cc65 `--cpu 6502` only (no 65C02). |
-| Emulator | Microcoded 8-bit bus, one ALU, packed EEPROM control words. **Design B fetch:** PC on the address bus + dedicated PC+1 (2 µsteps FETCH, 2 µsteps `fetch_byte`). Contiki/BASIC ~13 µsteps/instruction. EA/SP/INX still use the general ALU. |
+| Emulator | Microcoded 8-bit bus, one ALU, packed EEPROM control words. Design B fetch is ADDR_PC + hardware PC+1 in **one** µstep per opcode/operand byte. Stack uses ADDR_SP; INX/Y/SP use an 8-bit +1/−1 helper. Indexed EA still uses the ALU. |
 | Software | Monitor at `$E000`. Contiki console + BASIC. FUZIX kernel bring-up (CF boot, not a finished Unix box). TCP stays on the ESP32 mailbox, not uIP on the 6502. |
-| Hardware v1 | **Design B** in [RELAY65_HARDWARE_IMPLEMENTATION.md](RELAY65_HARDWARE_IMPLEMENTATION.md): relay storage and bus routing, dedicated PC+1 + PC/MAR address select, contact-mode ALU carry. Expected **~315–360 populated DPDT**, BOM envelope **~450**. Fast fetch is a later **microcode substitution**; software must not notice. |
+| Hardware v1 | **Design B** in [RELAY65_HARDWARE_IMPLEMENTATION.md](RELAY65_HARDWARE_IMPLEMENTATION.md): relay storage and bus routing, dedicated PC+1 + PC/MAR address select, contact-mode ALU carry. Expected **~315–360 populated DPDT**, BOM envelope **~450**. Fast fetch is a **microcode substitution**; software must not notice. |
 
 ## Design rules
 
 1. The emulator is the hardware contract. If the emulator does it, the relay CPU does it.
 2. Relays hold and route CPU data and perform ALU work. Silicon sequences coils and stores memory.
-3. Spend relays on fetch/PC: traces showed **~50% of microsteps** were ALU `pc_inc`. The emulator now uses dedicated PC+1 + ADDR_PC (Design B). Do not duplicate the ALU.
+3. Spend relays on fetch/PC: traces show **~50% of microsteps** are `pc_inc`. Do not duplicate the ALU to go faster.
 4. Prefer real speed, an electromechanical datapath, and a buildable relay count over a 220-relay silicon-bus minimum.
 
 Philosophy and card-cage intent: [DESIGN.md](DESIGN.md). Frozen emulator/hardware contract: [docs/RELAY-CPU.md](docs/RELAY-CPU.md). OS map: [docs/OS-BRINGUP.md](docs/OS-BRINGUP.md).
@@ -37,7 +37,7 @@ cd emulator && python3 -m unittest discover -s tests -v
 ./relay65 --gui --overclock --run --load software/contiki/hello-world.bin
 ```
 
-`--overclock` skips millisecond coil waits (needed to use Contiki/BASIC on a PC). Default timing is ~20 ms per microstep.
+`--overclock` skips millisecond coil waits (needed to use Contiki/BASIC on a PC). Default timing is ~20 ms per microstep. `--minute` (or SPEED on the panel) runs 60×: one PC second = one minute of relay time.
 
 Panel: `R` run, `S` stop, space step, `I` reset, `A`+hex examine address, `D`+hex data, `E` examine, `P` deposit. Serial is the Teletype (`$C000`); lamps are the front panel.
 
@@ -91,9 +91,9 @@ C programs load at `$0200`. IRQ/NMI ROM vectors `JMP ($00F0)` / `JMP ($00F2)`. D
 
 **Monitor** — dump/deposit/go, `f` CF boot. RESET always hits ROM; `--fuzix` inserts CF + jumper, it does not poke PC.
 
-**Contiki** — no IPv6/uIP on the 6502. `hello-world` then the console (`help`, `basic`, `time`, `peek`/`poke`). Type in the GUI serial pane.
+**Contiki** — no IPv6/uIP on the 6502. Daily OS. The shell is **Clack** (`help`, `ls`, `man`, `edit`, `basic`, `time`, `peek`/`poke`). Type in the GUI serial pane.
 
-**BASIC** — integer Tiny BASIC subset inside the Contiki console (`PRINT`, `FOR`/`NEXT`, `PEEK`/`POKE`, `BYE`).
+**BASIC** — integer Tiny BASIC subset started from Clack (`PRINT`, `LET`, `RUN`, `PEEK`/`POKE`, `BYE`).
 
 **FUZIX** — NMOS 6502 platform; kernel can sign on and wait at `bootdev:`. Root filesystem / `/init` are still bring-up work. See `fuzix/Kernel/platform/platform-relay65/README.md`.
 
@@ -122,7 +122,7 @@ Planned v1 physical CPU (Design B):
 - Variable microcycle classes so ADD does not slow every transfer
 - **One** ALU; no second adder, no INX helper in v1
 
-Do not retarget **further** microcode (fused writeback, TCLASS) until the first ten bench experiments in the hardware document pass. Fast fetch is already in the emulator so software and the planned CPU stay aligned.
+Do not retarget emulator microcode until the first ten bench experiments in the hardware document pass.
 
 ## Documentation
 

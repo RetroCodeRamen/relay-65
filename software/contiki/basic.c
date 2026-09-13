@@ -1,6 +1,6 @@
 #include "basic.h"
 
-#include <stdio.h>
+#include "uart.h"
 
 #define MAXLINES 24
 #define LINELEN  40
@@ -661,7 +661,7 @@ basic_line(char *line)
   if(kw("bye")) {
     running = 0;
     waiting = 0;
-    printf("monitor\n");
+    uart_puts("clack\n");
     return 1;
   }
   if(waiting) {

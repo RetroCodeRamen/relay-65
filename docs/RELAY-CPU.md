@@ -19,18 +19,18 @@ microcode and this document together.
 | Topic | v0.1 decision | Why |
 | --- | --- | --- |
 | Internal datapath | **One** 8-bit bus | Fewer backplane pins and fewer bus-driver relays. Time-multiplex everything onto it. |
-| ALU | **One** 8-bit ALU, reused for everything | Relays are expensive; cycles are cheap. |
-| PC increment | **Dedicated 16-bit +1** (`CW.pc_inc`); fetch uses **PC on A[15:0]** (`CW.addr_pc`) | Software-invisible microcode substitution (Design B). ALU still does EA/SP/INX. |
-| SP increment | Same ALU | Identical 8-bit inc/dec sequence as INX, just targeting SP. |
+| ALU | **One** 8-bit ALU, reused for EA, SP, ADC, INX | Relays are expensive; cycles are cheap. No second ALU. |
+| PC increment | Dedicated PC+1 + ADDR_PC (Design B) | Packed with opcode/operand fetch: one EEPROM row, dual Φ2 LOAD. |
+| SP increment | Same general ALU | Identical 8-bit inc/dec sequence as INX, just targeting SP. |
 | Shifts | Inside the ALU | ASL/LSR/ROL/ROR are ALU ops, not a second shifter card. |
 | Temporaries | Relay-visible: IR, MDR, MAR, T, ALU_A, ALU_B | Needed for sequencing; still observable. |
 | Microcode | Horizontal control word in EEPROM | EEPROM outputs drive coil drivers almost directly. |
 | Clock | Two phases per microstep + a settle wait | Matches contact operate/bounce. |
 | Memory | Semiconductor SRAM + ROM; CPU only sees MAR + R/W + data | CPU never “indexes an array”; it performs bus cycles. |
 
-A later dedicated PC+1 helper is allowed if bench timing shows fetch is too
-slow — but it must remain a **microcode substitution** (one control bit that
-today expands to an ALU sequence). Software must not notice.
+The dedicated PC+1 and ADDR_PC bits are already the fetch path. Changing packing
+(one vs two rows, END on the last useful word) is a microcode substitution.
+Software must not notice.
 
 ---
 
@@ -52,8 +52,8 @@ module is independently testable, matching DESIGN.md §13.
   | ALU               |  ALU_A, ALU_B latches, F-block, C latch, flags
   +------------------+
   +------------------+
-  | PC / Address      |  PCL, PCH, MARL, MARH, MDR, IR
-  +------------------+     A[15:0] = MAR (not live PC)
+| PC / Address      |  PCL, PCH, MARL, MARH, MDR, IR
++------------------+     A[15:0] = PC if ADDR_PC else MAR
   +------------------+
   | Memory / System   |  SRAM, ROM, address decode, bank latch
   +------------------+
@@ -71,7 +71,7 @@ This is what peripherals see. It is **not** a 6502 chip pinout.
 
 | Signal | Owner | Notes |
 | --- | --- | --- |
-| A[15:0] | Address card | MAR for EA/stack/vectors; **PC** when `ADDR_PC` (opcode/operand fetch) |
+| A[15:0] | Address card | PC if ADDR_PC, else `$0100|SP` if ADDR_SP, else MAR |
 | D[7:0] | Memory or CPU MDR | Shared with internal bus during MEM_RD/MEM_WR, or buffered later |
 | MEM_RD | Control | Active after settle; memory/UART drive data |
 | MEM_WR | Control | Active after settle; memory/UART sample data |
@@ -122,19 +122,35 @@ The ALU card has:
 
 SBC is ADC with ALU_B inverted (XOR $FF) and carry-in from P.C — same adder.
 CMP is SBC that loads flags but does not write A.
-INC is ADD with CONST 1. DEC is ADD with CONST $FF.
+Memory INC/DEC still use that adder. INX/INY/DEX/DEY/SP±1/MARL±1 use a
+shared **8-bit +1/−1 helper** (~10–12 DPDT, XOR + propagate from the selected
+register Q). That is not a second ALU: no AND/OR, no carry-in from P.C, no
+BCD.
 
-**PC increment** on opcode/operand fetch (and RTS) is a dedicated 16-bit
-incrementer, one microstep, Φ2 LOAD after the memory sample:
+**PC increment** (opcode and operand fetch) is hardware PC+1 plus ADDR_PC,
+packed into **one EEPROM row** — Design B dual Φ2 LOAD. The general ALU is
+**not** used for PC+1. The incrementer evaluates from PC Q during Φ1 (it does
+not use the internal bus). Φ2 strobes dest LOAD (IR/MDR/MAR) and PC LOAD
+together. Splitting those LOADs is only a current-spike fallback, not a missing
+coil.
 
 ```
-ADDR_PC; MEM_RD → IR or MDR     ; PHASE 1 (A[15:0] = PC; inc evaluates)
-PC ← PC + 1                     ; PHASE 2 (does not touch P)
+ADDR_PC; MEM → IR or MDR; PC ← PC+1     ; one row, two Φ2 LOADs
 ```
 
-Indexed addresses (`abs,X`, `(zp),Y`, …) still use the **general ALU**
-(`add8`) with X/Y. SP±1 still uses the ALU. That reuse remains the machine:
-you solder **one** 8-bit adder plus a thin PC+1 network.
+**Stack:** ADDR_SP puts `$0100|SP` on A[15:0] (~8 DPDT extra on the address
+mux). PHA is one row: SRC on the bus, MEM_WR, SP−1 on the helper at Φ2.
+ADDR_SP samples SP Q before that LOAD.
+
+**Taken branch:** ALU A-input can be the live bus (~4 DPDT) and B-input can be
+M7EXT (~1–4 DPDT). Operand fetch also LOADs ALU_B from the data bus. Relative
+add is then two ALU rows, not six bus copies.
+
+Indexed addresses (`abs,X`, `(zp),Y`, …) still use the **one** 8-bit adder
+(T + X/Y, then ADC on the high byte).
+
+That reuse is the point of the machine: you solder **one** 8-bit adder. PC+1,
+SP±1, and INX/Y are incrementers because they showed up in every hot path.
 
 ---
 
@@ -173,22 +189,32 @@ address is `{IR[7:0], uStep[5:0]}` (64 rows per opcode). Unused rows are
 | 3 | END_IF[3:0] |
 | 4 | CONST |
 | 5 | P_OR (B/U when pushing P) |
-| 6 | ADDR_PC[0], PC_INC[1]; rest 0 |
+| 6 | ADDR_PC[0], PC_INC[1], ADDR_SP[2], REG_INC[3], REG_DEC[4], ALU_A_BUS[5], ALU_B_M7EXT[6], ALSO_ALU_B[7] |
 | 7 | reserved 0 |
 
 1. **FETCH** — shared. Not stored per opcode.
 2. **EXECUTE** — indexed by IR and uStep.
 
-FETCH (two settled phases, Design B):
+FETCH:
 
 ```
-ADDR_PC; MEM_RD → IR
-PC ← PC + 1
+ADDR_PC; MEM → IR; PC ← PC+1     ; opcode from PC, not MAR; dual Φ2 LOAD
 ```
+
+Operand `fetch_byte` is the same packed row with MDR instead of IR. EEPROM byte 6
+bit0 = ADDR_PC, bit1 = PC_INC. They are allowed together on one word. Remaining
+byte-6 bits are the small helpers: ADDR_SP (A=`$0100|SP`), REG_INC/DEC (8-bit
++1/−1 into DST, or SP when DST is MEM), ALU_A_BUS, ALU_B_M7EXT, ALSO_ALU_B
+(also LOAD ALU_B from the bus on the same Φ2).
 
 Then `uStep := 0` and EEPROM address becomes IR.
 
-An instruction’s last micro-op sets **END**. Sequencer returns to FETCH.
+An instruction’s last useful micro-op sets **END** (not a trailing empty row,
+except NOP). Sequencer returns to FETCH.
+
+N/Z for loads and register transfers sample the internal bus (N=D7, Z=NOR(D)).
+C/V, and BIT’s N/V/Z, still come from the ALU card when that row’s ALU op is
+not NOP.
 Illegal opcodes have no rows: unused EEPROM is `FF…FF` and the sequencer **jams**.
 
 BRK/IRQ/NMI are extra execute programs: after END of an instruction, if NMI
@@ -282,7 +308,8 @@ this same monitor ROM.
 ## 10. What the emulator must not do
 
 - Interpret 6502 opcodes in Python instead of walking control words.
-- Read `ram[PC]` inside the CPU; only MAR+MEM_RD.
+- Read `ram[PC]` inside the CPU. Memory cycles use A[15:0] after ADDR_PC
+  (PC vs MAR) plus MEM_RD/MEM_WR.
 - Extra architectural registers that firmware can see but hardware will not have.
 - Host-side boot shortcuts: poking PC to `$4002`, clearing `$C016` from Python, or
   `load_ram` of the kernel. `--fuzix` inserts a CF image; RESET still hits ROM.

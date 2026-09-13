@@ -14,9 +14,22 @@ class Machine:
         self.uart = Uart(on_tx=on_tx)
         self.memory = MemoryCard(self.uart)
         self.cpu = CPU(self.memory)
-        self.running = True  # front-panel RUN/STOP; STOP is WAIT lamps on
         self.clock = WallClock()
+        self._running = True  # front-panel RUN/STOP; STOP is WAIT lamps on
+        self.clock.set_running(True)
         self.entry: int | None = None
+
+    @property
+    def running(self) -> bool:
+        return self._running
+
+    @running.setter
+    def running(self, on: bool) -> None:
+        on = bool(on)
+        if on == self._running:
+            return
+        self._running = on
+        self.clock.set_running(on)
 
     def load_rom(self, origin: int, data: bytes) -> None:
         self.memory.load_rom(origin, data)
@@ -48,22 +61,32 @@ class Machine:
 
     def reset(self) -> None:
         self.cpu.reset()
-        self.running = True
 
     def restart_loaded(self) -> None:
-        """RESET after --load: ROM reset, then PC back at the loaded program."""
+        """Front-panel RESET: back at the loaded program (or monitor RESET).
+
+        RUN/STOP is unchanged: if it was running it keeps running; if it was
+        stopped it stays stopped.
+        """
+        running = self.running
         self.reset()
-        if self.entry is None:
-            return
-        self.cpu.pc = self.entry & 0xFFFF
-        self.cpu.state = "FETCH"
-        self.cpu.ustep = 0
-        self.cpu.halted = False
+        if self.entry is not None:
+            self.cpu.pc = self.entry & 0xFFFF
+            self.cpu.state = "FETCH"
+            self.cpu.ustep = 0
+            self.cpu.halted = False
+        self.running = running
+        if running:
+            self.clock.sync()
 
     def step(self) -> None:
         if not self.running:
             return
+        before = self.cpu.microcycles
         self.cpu.step()
+        self.clock.add_usteps(self.cpu.microcycles - before)
 
     def step_instruction(self) -> None:
+        before = self.cpu.microcycles
         self.cpu.step_instruction()
+        self.clock.add_usteps(self.cpu.microcycles - before)

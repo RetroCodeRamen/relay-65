@@ -42,7 +42,7 @@ Eventually, I want Relay-65 to become a real little computer: its own console, r
 
 I have absolutely no idea how far I'm going to get.
 
-But we're going to build it anyway.
+But we're going to try to build it anyway.
 
 And hopefully, by the end of this, I'll understand computers a hell of a lot better than I did when I started.
 
@@ -55,13 +55,19 @@ Okay. So here's how we're actually going to build it.
 
 I already told you it's a 6502 in relays. The question is: why that?
 
-I thought about faking the processor in an FPGA. Fast, tidy, and it would completely miss the point. If the "CPU" is a bitstream, I'm just making a very loud USB gadget.
+I thought about just using chips. That's the sane 6502. Fast, tidy, already been done, and you never hear it think.
+
+Then I saw relay computers. Relays were practically the original. Before silicon, a computer was a room that clicked.
+
+So obviously I looked at the simplicity of a chip-level machine and thought: what if we made that more complicated, and infinitely louder.
 
 I thought about making *everything* out of relays — memory, serial, the lot. That's how you end up needing a shed, a three-phase outlet, and a divorce attorney.
 
 I thought about a "realer" CPU. Z80. 68000. More swagger. Also more pins, more state, more ways for me to get lost.
 
-6502 won because it's simple enough that I can *almost* hold the instruction set in my head.
+6502 won because I can actually understand it. Not just the names of the instructions — the whole little datapath that *does* them. Registers, bus, flags, what LDA actually *is*. I can narrate it.
+
+An 8086 has too many instructions, including a bunch I couldn't explain if you paid me. I'm not starting from a chip I don't understand.
 
 And because, if I'm being unreasonably ambitious, it can run Unix...
 
@@ -71,15 +77,17 @@ It's a Unix-like OS that already boots on a 6502. It needs a C compiler, banked 
 
 We're not building an entire computer out of relays. We're building the CPU out of relays. The registers, the ALU, the program counter — the parts that actually execute the program. RAM, ROM, serial, later a network card: those can be ordinary chips. Otherwise this thing never leaves the workbench.
 
-Relays are expensive. Cycles are cheap. So there's *one* eight-bit bus and *one* eight-bit ALU, reused for everything, including bumping the PC. Microcode lives in EEPROM; it just tells the relays what to do next. Memory is SRAM and ROM chips, because I am not storing BASIC in a warehouse of coils.
+Relays are expensive. Cycles are cheap — until they aren't. There's still *one* eight-bit bus and *one* eight-bit ALU. Add, subtract, index, the stack: they all share it. Bumping the program counter used to share it too, and that turned out to be half of every instruction. So we spent extra coils on a dedicated +1 for the PC. Microcode lives in EEPROM; it just tells the relays what to do next. Memory is SRAM and ROM chips, because I am not storing BASIC in a warehouse of coils.
 
 Cards are on a passive backplane. CPU in one set of slots, gadgets in the others. The 6502 only sees a memory map. It does not know, and should not care, what's behind a window.
 
-I started with Contiki because it's small. It can boot BASIC. If that runs, the hardware actually works.
+Last but definitely not least: the software.
 
-And then the pièce de résistance: Unix.
+Hardware is a very expensive paperweight if nothing runs on it. I did not want a blinkenlight demo. I wanted a prompt. Directories. The feeling that there is a machine under you and it has opinions about where your files live. On a pile of clicky relays. That is an unserious sentence, and I meant every word of it.
 
-Okay. FUZIX.
+So: Unix. The real bit. Processes. A disk. A shell. The kind of operating system that looks at a 6502 and says "sure, I've done worse."
+
+Okay. not Unix... FUZIX.
 
 I am not implementing TCP/IP in clicky gates. The cable out of the box is an ESP32 in a slot — Wi-Fi, Ethernet, whatever it's good at — appearing as a dumb handful of registers. The relay CPU still asks for the bytes. The ESP32 just talks to the internet so I don't have to.
 
@@ -100,31 +108,23 @@ So: what a 6502 even is, if you never had to care.
 
 It's a little eight-bit brain from 1975. It can remember a handful of bytes: A, X, Y, a stack pointer, some flags, and a sixteen-bit program counter that points at the next instruction in memory. Memory is just addresses. The CPU puts an address out, asks for a byte, and that byte is either "add this," or "jump there," or "the number seven."
 
-That's the whole job. Fetch a byte. Figure out what it meant. Do it. Fetch the next one. Over and over. Serial ports and bank switches are just more addresses — RAM with an attitude.
+That's the whole job. Fetch a byte. Figure out what it meant. Do it. Fetch the next one. Over and over. Serial ports and bank switches are just more addresses. Same bus. Different job.
 
 A real MOS 6502 does that with a PLA and timing tricks baked into silicon. We don't have silicon. We have relays. Relays are terrible at "figure out what it meant." They're pretty good at "copy this byte onto a wire and latch it over there."
 
-So we cheated in the honest direction. We translated the entire instruction set into microcode.
+So we cheated in the honest direction.
 
-Microcode is a recipe. Each 6502 opcode — LDA, ADC, JMP, all of them — is not one magic operation. It's a list of tiny moves.
+We wrote the whole instruction set down as recipes. Microcode. LDA is not a magic "load A" button. It's a list of tiny jobs: go get the next instruction. Go get the number it asked for. Put that number in A. Do the next one. ADC is the same idea, except somewhere in the list the adder actually adds. JMP is the same idea, except we stop fetching and start pointing somewhere else.
 
-Take LDA from an address. The *name* is "load the accumulator." The recipe is: put the program counter on the address bus. Read memory into a holding register. That's the opcode. Bump the PC. Read the next byte — low address. Bump the PC. Read the high address. Now go *there*, read the actual number, copy it into A, update the flags. Done. Go fetch again.
+Those recipes live in a cheap memory chip. The chip does not speak 6502. It just turns bits on. This wire. That latch. Add, or don't. The relays do what the bits say. If the bits say copy, something copies. If they say add, you hear it add.
 
-Every one of those moves is one row in an EEPROM. Wide rows. Horizontal control words. The chips do not understand 6502. They just turn bits on: source is PCL, destination is MAR low. Source is memory, destination is the data register. Source is the ALU, destination is A. The relays do what the bits say. If the bits say ADD, the adder clicks. If they say copy, something copies.
+We were cheap about the relays. One bus. One adder. Everything takes turns. We were *so* cheap we were going to bump the program counter on that same adder, every single instruction, all day. Then we counted. Half the machine's life was adding one. So we spent a few extra coils and gave the PC its own +1. Everything else still waits in line.
 
-We only bought one eight-bit bus and one eight-bit ALU. Everything shares them. Want to add one to the program counter? Same adder that does ADC. Eight little steps: low byte plus one, maybe a carry into the high byte. Every. Single. Instruction. Fetch. That's why this thing is going to sound like a typewriter having a panic attack, not like a CPU.
+And it is slow. Relays are metal. Metal has to move, bounce, settle. Call it twenty milliseconds a step if we're being kind. A real 6502 does this in a couple of microseconds. We do it like we're filling out a form in triplicate. Same number in A when we're done. I don't care how long it took. The software shouldn't either.
 
-Indexed addressing is the same trick with X or Y instead of the constant one. Subtract is add with the bits flipped. Compare is subtract where we keep the flags and throw away the answer. I'm not building a second computer for the clever ops. I'm wasting time so I don't waste coils.
+If we hit an instruction we never wrote, we jam. The lights freeze. That's on purpose. I'd rather see a dead machine than a silent pretend that everything's fine.
 
-Clocking is not a megahertz joke. Relays have to move metal. We wait for the contacts to settle, then we latch. Two phases per microstep. Call it twenty milliseconds if we're being kind to the coils. A real 6502 fetched an instruction in a couple of microseconds. We will fetch an instruction like we're filling out a form in triplicate.
-
-Same answer in A when we're done. Not the same number of cycles. I don't care. Software shouldn't either, as long as the registers and memory look like a 6502 when it looks.
-
-There's a shared FETCH program so we don't store "go get the next opcode" two hundred and fifty-six times. Then the instruction register becomes part of the EEPROM address, and we walk that opcode's list until a bit says END. Then fetch again.
-
-If we hit an opcode we never wrote, we jam. The lights freeze. That's a feature. I'd rather see a dead machine than a silent NOP pretending everything's fine.
-
-That's the computer. That's how a 1975 instruction set fits in a pile of relays that can barely add. We didn't shrink the 6502.
+That's the computer. We didn't shrink the 6502.
 
 We stretched it out in time until it was small enough to build.
 
@@ -148,4 +148,46 @@ If it isn't, we know which recipe went wrong — instead of staring at a pile of
 
 
 ------------------------------------------
+
+UNIX (then: not quite)
+
+So. Unix.
+
+I said I wanted FUZIX. I meant it. FUZIX is a real Unix-like kernel that already knows how to be a 6502: processes, a disk, `fork`, `exec`, a shell. If the emulator is honest, and the memory map is honest, it should boot the same way the metal will.
+
+And it does.
+
+[ON SCREEN: emulator, WARP, CompactFlash image. Wait for it. Do not type until the prompt.]
+
+That's FUZIX. The monitor copies the kernel off the CF card, the kernel mounts the filesystem, `/init` runs, there's no inittab so it just hands you a shell. `_>` at slash. You can `ls`. You can `cd`. That is a Unix boot on this fake 6502, walking the same microcode the relays are supposed to walk.
+
+I am not going to pretend that was easy. It was a lot of "why is write() hanging" and "why did typing during the IDE scan steal the root device." But it boots. That part of the brag is real.
+
+Now the part that is also real.
+
+Even in the emulator, OVERCLOCK on, WARP, no coil waits — just the computer under the desk chewing through the microcode as fast as it can — FUZIX is still *slow*. You sit there. You wait. The lamps twitch. Eventually a prompt. Then you type `ls` and you wait again. Not "old computer" slow. "Did I freeze it" slow.
+
+That's the emulator *skipping* the physics. The real box does not get to skip the physics.
+
+Each microstep is two coil edges. We pad those to about ten milliseconds apiece so the contacts can actually close. Twenty milliseconds per microstep. I sat there hoping I had the prefix wrong — microseconds, maybe, if we were lucky. We are not lucky. Relays move metal. Metal does not settle in twenty microseconds. If it did, FUZIX would boot in something like twenty, thirty minutes, and I would have a very different video.
+
+Do the math the honest way.
+
+FUZIX wants on the order of fifty to eighty *million* microsteps just to get a shell. At twenty milliseconds each, that is not an afternoon. That is days. One `ls` is another ten, twenty million. You would type a command on Monday and get the listing sometime midweek, assuming nobody bumped the table.
+
+So technically, I can say it: FUZIX can run on this. That part is true. It is also so far from practical that nobody is going to sit there and use it. I needed another option.
+
+Enter Contiki.
+
+Contiki is a tiny OS for computers that barely exist. No Unix kernel. No `fork`. We did not put a TCP stack on the 6502 either — the ESP32 still talks to the network; we just ask it for bytes. What we *did* put on top is a shell that behaves enough like a Unix box that your hands stop arguing.
+
+[ON SCREEN: same emulator, load the Contiki console. Prompt should be almost immediate.]
+
+`_>` at slash. `ls`. `cd www`. `cat`. A cwd in the prompt when you leave root, because otherwise it doesn't feel like a place. BASIC is a program you start and stop, not the whole personality of the machine. `httpd` too. There's a tiny editor for the HTML page that server actually sends.
+
+That is not Unix. I'm not going to put a beard on it and call it Unix.
+
+It is Unix-*like*. You get a prompt. You move around a directory tree. You run a thing, you come back. And on the real relays, at a few instructions per second, that is a computer you can *use* instead of a computer you can *describe*.
+
+FUZIX was the exam. Contiki is the daily driver. Same 6502. Same click. Different amount of life left in the day.
 

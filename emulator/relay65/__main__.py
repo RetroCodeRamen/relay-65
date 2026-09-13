@@ -77,6 +77,7 @@ def run_serial(machine: Machine, args) -> int:
 
     machine.uart.on_tx = tx
     last_ins = 0
+    machine.clock.reset_runtime()
     machine.clock.sync()
     try:
         while not machine.cpu.halted:
@@ -102,6 +103,7 @@ def run_panel(machine: Machine, args) -> int:
     serial = SerialPort(args.serial_port)
     serial.attach_tx(machine)
     panel = FrontPanel(machine)
+    machine.clock.reset_runtime()
     machine.running = bool(args.run)
     machine.clock.sync()
     panel.enter_cbreak()
@@ -187,6 +189,11 @@ def main(argv: list[str] | None = None) -> int:
         help="run as fast as the host (skip relay operate/release waits)",
     )
     p.add_argument(
+        "--minute",
+        action="store_true",
+        help="1 host second = 1 minute of relay time (60×). SPEED on the panel cycles RELAY / 1s=1min / WARP",
+    )
+    p.add_argument(
         "--realtime",
         action="store_true",
         help="force relay-timed clock even with --max",
@@ -228,9 +235,14 @@ def main(argv: list[str] | None = None) -> int:
     machine = Machine()
     load_machine(machine, args)
     interactive = bool(args.gui or args.panel or (sys.stdin.isatty() and args.max is None))
-    overclock = args.overclock or (not args.realtime and not interactive)
+    if args.overclock or (not args.realtime and not interactive):
+        speed = "warp"
+    elif args.minute:
+        speed = "minute"
+    else:
+        speed = "relay"
     machine.clock.configure(
-        overclock=overclock,
+        speed=speed,
         datasheet=args.timing == "datasheet",
         phase_ms=args.phase_ms,
     )
@@ -252,7 +264,7 @@ def _run_gui(machine: Machine, burst: int, start_running: bool) -> int:
         from .webui import run_web
 
         print("tkinter not installed — serial is the green box at http://127.0.0.1:8065", file=sys.stderr)
-        print("(UART is also copied to this terminal.) Do not press RESET unless you want to restart.", file=sys.stderr)
+        print("(UART is also copied to this terminal.) RUN starts, STOP pauses, RESET rewinds to the loaded program.", file=sys.stderr)
         return run_web(machine, burst=burst, start_running=start_running)
 
 

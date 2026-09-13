@@ -10,7 +10,7 @@ Keyboard (this terminal):
   R      RUN
   S      STOP
   space  single-step one 6502 instruction
-  I      RESET (CPU; serial is the other connector)
+  T      cycle SPEED (RELAY → 1s=1min → WARP)
   Q      quit
 """
 
@@ -57,9 +57,10 @@ class FrontPanel:
             [
                 "=== RELAY-65 FRONT PANEL  (* on  . off) ===",
                 lamps.text(),
+                self.machine.clock.runtime_label() + f"  {self.machine.clock.label()}",
                 f"SW A {sw_a.replace('1', '^').replace('0', '_')}  ${self.sw_addr:04X}",
                 f"SW D {sw_d.replace('1', '^').replace('0', '_')}          ${self.sw_data:02X}{hint}",
-                "Axxxx Dxx  E examine  N next  P deposit  O dep-next  R run  S stop  SPACE step  I reset  Q quit",
+                "Axxxx Dxx  E examine  N next  P deposit  O dep-next  R run  S stop  T speed  SPACE step  I reset  Q quit",
                 "Serial is the other connector (TCP --serial-port, default 6502).",
             ]
         )
@@ -117,8 +118,9 @@ class FrontPanel:
             self.machine.running = False
             self.machine.step_instruction()
         elif up == "I":
-            self.machine.reset()
-            self.machine.running = False
+            self.machine.restart_loaded()
+        elif up == "T":
+            self.machine.clock.cycle_speed()
         return True
 
     def _commit_hex(self) -> None:

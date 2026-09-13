@@ -668,7 +668,7 @@ Three contracts, kept distinct:
 | **Current emulator microarchitecture** | `isa.py` row lists, 12-row FETCH, 11-row `fetch_byte`, 8-row `pc_inc`, ALU_A/ALU_B always loaded first | `WallClock` only, until we retarget microcode |
 | **Proposed physical optimization** | Faster equivalent of the same architectural transfers | FETCH/`fetch_byte`/`pc_inc` row counts; optional bypass bits; timing-class bits |
 
-If hardware is built as specified here, the emulator’s **microcode engine** already matches Design B fetch: shorter FETCH page, `fetch_byte`/`pc_inc` substitution, `ADDR_PC` and `PC_INC` bits in CW byte 6. Timing-class bits and fused ALU+DST are still later.
+If hardware is built as specified here, the emulator’s **microcode engine** (not the ISA) would later need a shorter FETCH page, `fetch_byte`/`pc_inc` substitution, and optional CW bits for address-source, PC_INC, timing class, and fused ALU destination. **Those emulator edits are identified, not implemented.**
 
 ---
 
@@ -1047,12 +1047,14 @@ Not allowed: different A/X/Y/SP/P/PC/memory results; 65C02; filling illegal opco
 | `pc_inc` on RTS | PC←PC+1 hardware | PC points at next instruction |
 | `xfer(A,ALU_A); alu; xfer(ALU,A)` | optional fuse | A updated, flags as now |
 
-**Emulator changes (implemented for Design B fetch):**
+**Emulator changes later (not now):**
 
-1. `isa.FETCH` / `isa.fetch_byte` / `isa.pc_inc` are the 2-phase / 1-row sequences.
-2. `CW.pack` byte 6: `ADDR_PC`, `PC_INC`.
-3. Timing class and fused DST are **not** in the control word yet.
-4. Tests assert architectural state and FETCH length 2 / LDA # = 8 µsteps.
+1. `isa.FETCH` / `isa.fetch_byte` / `isa.pc_inc` rewritten to the 2-phase sequences (or CW bits `addr_pc` / `pc_inc_hw`).
+2. `CW.pack` unused bytes: `TCLASS`, maybe fused DST.
+3. `WallClock` / `CPU.step` wait by class.
+4. Tests that assert **row counts** updated; tests that assert **architectural state** unchanged.
+
+Do not retarget microcode until experiments 1–6 and 9–10 pass.
 
 ---
 

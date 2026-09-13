@@ -1,7 +1,7 @@
 """Altair-style front-panel lamps.
 
 These are the same signals lamps would tap on the real backplane:
-A[15:0] from MAR or PC (ADDR_PC fetch), D[7:0] from the internal/system data bus, IR, and a
+A[15:0] from MAR, D[7:0] from the internal/system data bus, IR, and a
 few status bits from the control/status cards.
 
 On = '*'  Off = '.'   so you can read the machine with no GUI, like
@@ -74,7 +74,7 @@ def sample(machine) -> LampState:
     cpu = machine.cpu
     p = cpu.reg.p
     return LampState(
-        addr=cpu.last_addr if cpu.microcycles else cpu.addr.mar,
+        addr=cpu.addr.mar,
         data=cpu.last_bus,
         ir=cpu.addr.ir,
         pc=cpu.addr.pc,
