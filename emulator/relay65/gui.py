@@ -120,6 +120,11 @@ def _canvas_width(n: int, gap: int = 22, group: int = 8) -> int:
     return 20 + n * gap + extra
 
 
+def _pad(left: int, right: int = 0) -> tuple[int, int]:
+    """Windows Tcl rejects negative pack padx; X11 allowed it as a left nudge."""
+    return (max(0, int(left)), max(0, int(right)))
+
+
 class RelayGui:
     def __init__(self, machine, burst: int = 800, start_running: bool = False) -> None:
         self.machine = machine
@@ -155,9 +160,9 @@ class RelayGui:
         bg = parent.cget("bg")
         row = tk.Frame(parent, bg=bg)
         if side == "left":
-            row.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=0, padx=(shift, 6))
+            row.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, pady=0, padx=_pad(shift, 6))
         else:
-            row.pack(fill=tk.X, pady=0, padx=(-35 + shift, 0))
+            row.pack(fill=tk.X, pady=0, padx=_pad(-35 + shift, 0))
         tk.Label(row, text=title, fg=DIM, bg=bg, font=(MONO, 12), width=11, anchor="e").pack(
             side=tk.LEFT, padx=(0, 6)
         )
@@ -197,7 +202,7 @@ class RelayGui:
 
     def _pair(self, parent, shift: int = 0) -> tk.Frame:
         f = tk.Frame(parent, bg=parent.cget("bg"))
-        f.pack(fill=tk.X, padx=(-35 + shift, 0))
+        f.pack(fill=tk.X, padx=_pad(-35 + shift, 0))
         return f
 
     def _build_header(self) -> None:
